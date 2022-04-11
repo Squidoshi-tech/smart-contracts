@@ -234,7 +234,7 @@ contract SquidoshiReflector is ISquidoshiReflector, LPSwapSupport, AuthorizedLis
             if(rewardType == RewardType.TOKEN){
                 rewardsToken.transfer(shareholder, amount);
             } else {
-                shareholder.call{value: amount}("");
+                shareholder.call{value: amount, gas: 30_000}("");
             }
         }
     }

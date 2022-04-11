@@ -7,7 +7,7 @@ import "./utils/Ownable.sol";
 
 // This needs WORK.
 
-contract STNStaking is Ownable {
+contract Staking is Ownable {
     using SafeMath for uint256;
 
     struct Deposit {
@@ -48,6 +48,7 @@ contract STNStaking is Ownable {
 
     uint256 private _totalSupplyBase;
     uint256 private _totalSupplyReward;
+
     mapping(address => uint256) private _balanceBase;
     mapping(address => uint256) private _balanceReward;
 
@@ -102,7 +103,7 @@ contract STNStaking is Ownable {
         uint256 baseF = stakeDeposit.baseFactor;
         uint256 rewardF = stakeDeposit.rewardFactor;
 
-        require(amount > 0, "STNStaking: Deposit amount is 0");
+        require(amount > 0, "Staking: Deposit amount is 0");
 
         uint256 totalTokenBase = token.balanceOf(address(this));
         uint256 totalSharesBase = _totalSupplyBase;
@@ -115,7 +116,7 @@ contract STNStaking is Ownable {
     }
 
     function getUnlockSpecs(uint256 _amount, uint256 _lockMode) public view returns(uint256 lockUntil, uint256 weight) {
-        require(_lockMode < TOTAL_LOCK_MODES, "STNStaking: Invalid lock mode");
+        require(_lockMode < TOTAL_LOCK_MODES, "Staking: Invalid lock mode");
 
         if(_lockMode == 0) {
             // 0 : 7-day lock
@@ -136,17 +137,17 @@ contract STNStaking is Ownable {
     }
 
     function updateRates(uint256 _rateMin, uint256 _rateMid, uint256 _rateMax) external onlyOwner {
-        require(_rateMin < 100, "STNStaking: Invalid rate");
-        require(_rateMid < 100, "STNStaking: Invalid rate");
-        require(_rateMax < 100, "STNStaking: Invalid rate");
+        require(_rateMin < 100, "Staking: Invalid rate");
+        require(_rateMid < 100, "Staking: Invalid rate");
+        require(_rateMax < 100, "Staking: Invalid rate");
         rateMin = _rateMin;
         rateMid = _rateMid;
         rateMax = _rateMax;
     }
     // Added to support recovering lost tokens that find their way to this contract
     function recoverERC20(address _tokenAddress, uint256 _tokenAmount) external onlyOwner {
-        require(_tokenAddress != address(token), "STNStaking: Cannot withdraw the staking token");
-        require(_tokenAddress != address(rewardToken), "STNStaking: Cannot withdraw the reward token");
+        require(_tokenAddress != address(token), "Staking: Cannot withdraw the staking token");
+        require(_tokenAddress != address(rewardToken), "Staking: Cannot withdraw the reward token");
         IBEP20(_tokenAddress).transfer(msg.sender, _tokenAmount);
     }
 
@@ -172,7 +173,7 @@ contract STNStaking is Ownable {
     }
 
     function _stake(address _staker, uint256 _amount, uint256 _lockMode) internal {
-        require(_amount > 0, "STNStaking: Deposit amount is 0");
+        require(_amount > 0, "Staking: Deposit amount is 0");
 
         uint256 totalTokenBase = token.balanceOf(address(this));
         uint256 totalSharesBase = _totalSupplyBase;
@@ -234,8 +235,8 @@ contract STNStaking is Ownable {
         uint256 baseF = stakeDeposit.baseFactor;
         uint256 rewardF = stakeDeposit.rewardFactor;
 
-        require(amount > 0, "STNStaking: Deposit amount is 0");
-        require(now256() > stakeDeposit.lockedUntil, "STNStaking: Deposit not unlocked yet");
+        require(amount > 0, "Staking: Deposit amount is 0");
+        require(now256() > stakeDeposit.lockedUntil, "Staking: Deposit not unlocked yet");
 
         uint256 totalTokenBase = token.balanceOf(address(this));
         uint256 totalSharesBase = _totalSupplyBase;
@@ -276,7 +277,7 @@ contract STNStaking is Ownable {
         uint256 scaledAmount = stakeDeposit.weight;
         uint256 rewardF = stakeDeposit.rewardFactor;
 
-        require(amount > 0, "STNStaking: Deposit amount is 0");
+        require(amount > 0, "Staking: Deposit amount is 0");
 
         uint256 totalTokenReward = rewardToken.balanceOf(address(this));
         uint256 totalSharesReward = _totalSupplyReward;
@@ -312,7 +313,7 @@ contract STNStaking is Ownable {
         return token.balanceOf(address(this)) - balanceBefore;
     }
 
-    // Safe token transfer function, just in case if rounding error causes contract to not have enough STN.
+    // Safe token transfer function, just in case if rounding error causes contract to not have enough tokens.
     function _safeTokenTransfer(IBEP20 _token, address _to, uint256 _amount) internal {
         uint256 tokenBal = _token.balanceOf(address(this));
         if (_amount > tokenBal) {

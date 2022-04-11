@@ -197,7 +197,7 @@ contract SquidoshiSmartLottery is ISmartLottery, LPSwapSupport, LockableFunction
 
     function reward(address winner) private {
         if(rewardType == RewardType.CURRENCY){
-            winner.call{value: jackpot}("");
+            winner.call{value: jackpot, gas: 30_000}("");
         } else if(rewardType == RewardType.TOKEN){
             lotteryToken.transfer(winner, jackpot);
         }

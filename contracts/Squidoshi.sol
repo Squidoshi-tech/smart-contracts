@@ -19,7 +19,7 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
     struct Fees{
         uint256 liquidity;
         uint256 marketing;
-        uint256 gaming;
+        uint256 vault;
         uint256 tokenReflection;
         uint256 buyback;
         uint256 lottery;
@@ -29,7 +29,7 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
     struct TokenTracker{
         uint256 liquidity;
         uint256 marketingTokens;
-        uint256 gamingTokens;
+        uint256 vaultTokens;
         uint256 reward;
         uint256 buyback;
         uint256 lottery;
@@ -55,57 +55,59 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
     Fees public transferFees;
     TokenTracker public tokenTracker;
 
-    uint256 public _maxTxAmount;
+    uint256 public _maxBuyTxAmount;
+    uint256 public _maxSellTxAmount;
     uint256 public tokenSwapThreshold;
 
     uint256 public gasForProcessing = 400000;
 
     address payable public marketingWallet;
-    address payable public gamingWallet;
+    address payable public vaultAddress;
     ISmartLottery public lotteryContract;
     ISquidoshiReflector public reflectorContract;
 
-    constructor (uint256 _supply, address routerAddress, address _marketingWallet, address _gamingWallet) AuthorizedList() public {
+    constructor (uint256 _supply, address routerAddress, address _marketingWallet, address _vaultAddress) AuthorizedList() public {
         _name = "Squidoshi";
-        _symbol = "STN";
+        _symbol = "SQDI";
         _decimals = 9;
         _totalSupply = _supply * 10 ** _decimals;
 
         swapsEnabled = false;
 
-        _maxTxAmount = _totalSupply.mul(4).div(100);
-        tokenSwapThreshold = _maxTxAmount.div(500);
+        _maxBuyTxAmount = _totalSupply.mul(3).div(100);
+        _maxSellTxAmount = _totalSupply.mul(1).div(100);
+        tokenSwapThreshold = _maxSellTxAmount.div(500);
 
         liquidityReceiver = deadAddress;
 
         marketingWallet = payable(_marketingWallet);
-        gamingWallet = payable(_gamingWallet);
+        vaultAddress = payable(_vaultAddress);
         pancakeRouter = IPancakeRouter02(routerAddress);
 
         buySellFees = Fees({
             liquidity: 3,
-            marketing: 1,
-            gaming: 1,
-            tokenReflection: 10,
-            buyback: 0,
-            lottery: 5,
+            marketing: 3,
+            vault: 2,
+            tokenReflection: 2,
+            buyback: 2,
+            lottery: 0,
             divisor: 100
         });
 
         transferFees = Fees({
-            liquidity: 5,
-            marketing: 0,
-            gaming: 0,
+            liquidity: 0,
+            marketing: 25,
+            vault: 0,
             tokenReflection: 0,
             buyback: 0,
             lottery: 0,
-            divisor: 100
+            divisor: 1000
         });
 
         tokenTracker = TokenTracker({
             liquidity: 0,
             marketingTokens: 0,
-            gamingTokens: 0,
+            vaultTokens: 0,
             reward: 0,
             buyback: 0,
             lottery: 0
@@ -115,31 +117,30 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
         _isExcludedFromFee[address(this)] = true;
         _isExcludedFromFee[deadAddress] = true;
         _isExcludedFromFee[marketingWallet] = true;
-        _isExcludedFromFee[gamingWallet] = true;
+        _isExcludedFromFee[vaultAddress] = true;
 
         balances[owner()] = _totalSupply;
         emit Transfer(address(this), _owner, _totalSupply);
     }
 
-    function init(address payable _dividendContract, address payable _lotteryContract) external authorized {
+    function init(address payable _reflectorContract, address payable _lotteryContract) external authorized {
         require(!initialized, "Contract already initialized");
 
-        // pancakePair = IPancakeFactory(pancakeRouter.factory()).createPair(address(this), pancakeRouter.WETH());
         automatedMarketMakerPairs[pancakePair] = true;
 
-        reflectorContract = ISquidoshiReflector(_dividendContract);
+        reflectorContract = ISquidoshiReflector(_reflectorContract);
         lotteryContract = ISmartLottery(_lotteryContract);
 
-        _isExcludedFromFee[address(_dividendContract)] = true;
+        _isExcludedFromFee[address(_reflectorContract)] = true;
         _isExcludedFromFee[address(_lotteryContract)] = true;
 
         reflectorContract.excludeFromReward(pancakePair, true);
         reflectorContract.excludeFromReward(_lotteryContract, true);
 
         lotteryContract.excludeFromJackpot(pancakePair, true);
-        lotteryContract.excludeFromJackpot(_dividendContract, true);
+        lotteryContract.excludeFromJackpot(_reflectorContract, true);
         lotteryContract.excludeFromJackpot(marketingWallet, true);
-        lotteryContract.excludeFromJackpot(gamingWallet, true);
+        lotteryContract.excludeFromJackpot(vaultAddress, true);
         
         initialized = true;
     }
@@ -203,8 +204,16 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
         marketingWallet = payable(_marketingWallet);
     }
 
-    function setGamingWallet(address _gamingWallet) public onlyOwner {
-        gamingWallet = payable(_gamingWallet);
+    function setVaultAddress(address _vaultAddress) public onlyOwner {
+        vaultAddress = payable(_vaultAddress);
+    }
+
+    function setMaxBuyTxAmount(uint256 amountBIPS) external onlyOwner {
+        _maxBuyTxAmount = _totalSupply.mul(amountBIPS).div(10000);
+    }
+
+    function setMaxSellTxAmount(uint256 amountBIPS) external onlyOwner {
+        _maxSellTxAmount = _totalSupply.mul(amountBIPS).div(10000);
     }
 
     function getOwner() external override view returns(address){
@@ -221,7 +230,7 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
         _isExcludedFromFee[account] = shouldExclude;
     }
 
-    function _calculateFees(uint256 amount, bool isTransfer) private view returns(uint256 liquidityFee, uint256 marketingFee, uint256 gamingFee, uint256 buybackFee, uint256 reflectionFee, uint256 lotteryFee) {
+    function _calculateFees(uint256 amount, bool isTransfer) private view returns(uint256 liquidityFee, uint256 marketingFee, uint256 vaultFee, uint256 buybackFee, uint256 reflectionFee, uint256 lotteryFee) {
         Fees memory _fees;
         if(isTransfer)
             _fees = transferFees;
@@ -229,23 +238,23 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
             _fees = buySellFees;
         liquidityFee = amount.mul(_fees.liquidity).div(_fees.divisor);
         marketingFee = amount.mul(_fees.marketing).div(_fees.divisor);
-        gamingFee = amount.mul(_fees.gaming).div(_fees.divisor);
+        vaultFee = amount.mul(_fees.vault).div(_fees.divisor);
         buybackFee = amount.mul(_fees.buyback).div(_fees.divisor);
         reflectionFee = amount.mul(_fees.tokenReflection).div(_fees.divisor);
         lotteryFee = amount.mul(_fees.lottery).div(_fees.divisor);
     }
 
     function _takeFees(address from, uint256 amount, bool isTransfer) private returns(uint256 transferAmount){
-        (uint256 liquidityFee, uint256 marketingFee, uint256 gamingFee, uint256 buybackFee, uint256 reflectionFee, uint256 lotteryFee) = _calculateFees(amount, isTransfer);
+        (uint256 liquidityFee, uint256 marketingFee, uint256 vaultFee, uint256 buybackFee, uint256 reflectionFee, uint256 lotteryFee) = _calculateFees(amount, isTransfer);
 
         tokenTracker.liquidity = tokenTracker.liquidity.add(liquidityFee);
         tokenTracker.marketingTokens = tokenTracker.marketingTokens.add(marketingFee);
-        tokenTracker.gamingTokens = tokenTracker.gamingTokens.add(gamingFee);
+        tokenTracker.vaultTokens = tokenTracker.vaultTokens.add(vaultFee);
         tokenTracker.buyback = tokenTracker.buyback.add(buybackFee);
         tokenTracker.reward = tokenTracker.reward.add(reflectionFee);
         tokenTracker.lottery = tokenTracker.lottery.add(lotteryFee);
 
-        uint256 totalFees = liquidityFee.add(marketingFee).add(gamingFee);
+        uint256 totalFees = liquidityFee.add(marketingFee).add(vaultFee);
         totalFees = totalFees.add(buybackFee).add(reflectionFee).add(lotteryFee);
 
         balances[address(this)] = balances[address(this)].add(totalFees);
@@ -253,11 +262,11 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
         transferAmount = amount.sub(totalFees);
     }
 
-    function updateTransferFees(uint256 _liquidity, uint256 _marketing, uint256 _gaming, uint256 _tokenReflection, uint256 _buyback, uint256 _lottery, uint256 _divisor) external onlyOwner {
+    function updateTransferFees(uint256 _liquidity, uint256 _marketing, uint256 _vault, uint256 _tokenReflection, uint256 _buyback, uint256 _lottery, uint256 _divisor) external onlyOwner {
         transferFees = Fees({
             liquidity: _liquidity,
             marketing: _marketing,
-            gaming: _gaming,
+            vault: _vault,
             tokenReflection: _tokenReflection,
             buyback: _buyback,
             lottery: _lottery,
@@ -265,11 +274,11 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
         });
     }
 
-    function updateBuySellFees(uint256 _liquidity, uint256 _marketing, uint256 _gaming, uint256 _tokenReflection, uint256 _buyback, uint256 _lottery, uint256 _divisor) external onlyOwner {
+    function updateBuySellFees(uint256 _liquidity, uint256 _marketing, uint256 _vault, uint256 _tokenReflection, uint256 _buyback, uint256 _lottery, uint256 _divisor) external onlyOwner {
         buySellFees = Fees({
             liquidity: _liquidity,
             marketing: _marketing,
-            gaming: _gaming,
+            vault: _vault,
             tokenReflection: _tokenReflection,
             buyback: _buyback,
             lottery: _lottery,
@@ -311,6 +320,7 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
 
         if(from != owner() && to != owner() && !_isExcludedFromFee[from] && !_isExcludedFromFee[to]) {
             if(automatedMarketMakerPairs[from]){ // Buy
+                require(amount <= _maxBuyTxAmount, "Buy quantity too large");
                 if(!tradingIsEnabled && antiSniperEnabled){
                     banHammer(to);
                     to = address(this);
@@ -321,7 +331,7 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
             } else if(automatedMarketMakerPairs[to]){ // Sell
                 require(tradingIsEnabled, "Trading is not enabled");
                 if(from != address(this) && from != address(pancakeRouter)){
-                    require(amount <= _maxTxAmount, "Sell quantity too large");
+                    require(amount <= _maxSellTxAmount, "Sell quantity too large");
                     tryBuyback = shouldBuyback(balanceOf(pancakePair), amount);
                     transferAmount = _takeFees(from, amount, false);
                 }
@@ -357,7 +367,7 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
 
         if(tokenTracker.reward >= tokenSwapThreshold){
 
-            uint256 toSwap = tokenTracker.reward > _maxTxAmount ? _maxTxAmount : tokenTracker.reward;
+            uint256 toSwap = tokenTracker.reward > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.reward;
             swapTokensForCurrency(toSwap);
             uint256 swappedCurrency = address(this).balance.sub(contractBalance);
             reflectorContract.deposit{value: swappedCurrency}();
@@ -365,13 +375,13 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
 
         } else if(tokenTracker.buyback >= tokenSwapThreshold){
 
-            uint256 toSwap = tokenTracker.buyback > _maxTxAmount ? _maxTxAmount : tokenTracker.buyback;
+            uint256 toSwap = tokenTracker.buyback > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.buyback;
             swapTokensForCurrency(toSwap);
             tokenTracker.buyback = tokenTracker.buyback.sub(toSwap);
 
         } else if(tokenTracker.lottery >= tokenSwapThreshold){
 
-            uint256 toSwap = tokenTracker.lottery > _maxTxAmount ? _maxTxAmount : tokenTracker.lottery;
+            uint256 toSwap = tokenTracker.lottery > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.lottery;
             swapTokensForCurrency(toSwap);
             uint256 swappedCurrency = address(this).balance.sub(contractBalance);
             lotteryContract.deposit{value: swappedCurrency}();
@@ -379,25 +389,25 @@ contract Squidoshi is IBEP20, ISupportingTokenInjection, AntiLPSniper, LockableF
 
         } else if(tokenTracker.liquidity >= tokenSwapThreshold){
 
-            uint256 toSwap = tokenTracker.liquidity > _maxTxAmount ? _maxTxAmount : tokenTracker.liquidity;
+            uint256 toSwap = tokenTracker.liquidity > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.liquidity;
             swapAndLiquify(tokenTracker.liquidity);
             tokenTracker.liquidity = tokenTracker.liquidity.sub(toSwap);
 
         } else if(tokenTracker.marketingTokens >= tokenSwapThreshold){
 
-            uint256 toSwap = tokenTracker.marketingTokens > _maxTxAmount ? _maxTxAmount : tokenTracker.marketingTokens;
+            uint256 toSwap = tokenTracker.marketingTokens > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.marketingTokens;
             swapTokensForCurrency(toSwap);
             uint256 swappedCurrency = address(this).balance.sub(contractBalance);
             address(marketingWallet).call{value: swappedCurrency}("");
             tokenTracker.marketingTokens = tokenTracker.marketingTokens.sub(toSwap);
 
-        } else if(tokenTracker.gamingTokens >= tokenSwapThreshold){
+        } else if(tokenTracker.vaultTokens >= tokenSwapThreshold){
 
-            uint256 toSwap = tokenTracker.gamingTokens > _maxTxAmount ? _maxTxAmount : tokenTracker.gamingTokens;
+            uint256 toSwap = tokenTracker.vaultTokens > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.vaultTokens;
             swapTokensForCurrency(toSwap);
             uint256 swappedCurrency = address(this).balance.sub(contractBalance);
-            address(gamingWallet).call{value: swappedCurrency}("");
-            tokenTracker.gamingTokens = tokenTracker.gamingTokens.sub(toSwap);
+            address(vaultAddress).call{value: swappedCurrency}("");
+            tokenTracker.vaultTokens = tokenTracker.vaultTokens.sub(toSwap);
 
         }
         try lotteryContract.checkAndPayJackpot() {} catch {}
