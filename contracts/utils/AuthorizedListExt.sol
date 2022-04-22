@@ -11,14 +11,10 @@ contract AuthorizedListExt is IAuthorizedListExt, AuthorizedList {
         multiAuth = allowNonOwnerAuths;
     }
 
-    function authorizeByAuthorized(address authAddress)
-        external
-        virtual
-        override
-        authorized
-    {
+    function authorizeByAuthorized(address authAddress) external virtual override authorized {
         require(multiAuth, "Option not set to allow this function");
         authorizedCaller[authAddress] = true;
         emit AuthorizationUpdated(authAddress, true);
     }
 }
+

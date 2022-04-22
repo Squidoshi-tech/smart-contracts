@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import "@pancakeswap/pancake-swap-lib/contracts/GSN/Context.sol";
+import '@openzeppelin/contracts/GSN/Context.sol';
 
 /**
  * @dev Contract module which provides a basic access control mechanism, where
@@ -21,10 +21,7 @@ abstract contract Ownable is Context {
     address private _previousOwner;
     uint256 private _lockTime;
 
-    event OwnershipTransferred(
-        address indexed previousOwner,
-        address indexed newOwner
-    );
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     constructor() internal {
         _owner = _msgSender();
@@ -41,7 +38,7 @@ abstract contract Ownable is Context {
      * @dev Throws if called by any account other than the owner.
      */
     modifier onlyOwner() {
-        require(_owner == _msgSender(), "Ownable: caller is not the owner");
+        require(_owner == _msgSender(), 'Ownable: caller is not the owner');
         _;
     }
 
@@ -63,10 +60,7 @@ abstract contract Ownable is Context {
      * Can only be called by the current owner.
      */
     function transferOwnership(address newOwner) public virtual onlyOwner {
-        require(
-            newOwner != address(0),
-            "Ownable: new owner is the zero address"
-        );
+        require(newOwner != address(0), 'Ownable: new owner is the zero address');
         emit OwnershipTransferred(_owner, newOwner);
         _owner = newOwner;
         _previousOwner = newOwner;
@@ -86,11 +80,8 @@ abstract contract Ownable is Context {
 
     //Unlocks the contract for owner when _lockTime is exceeds
     function unlock() public virtual {
-        require(
-            _previousOwner == msg.sender,
-            "You don't have permission to unlock"
-        );
-        require(block.timestamp > _lockTime, "Contract is not unlockable yet");
+        require(_previousOwner == msg.sender, "You don't have permission to unlock");
+        require(block.timestamp > _lockTime, 'Contract is not unlockable yet');
         emit OwnershipTransferred(_owner, _previousOwner);
         _owner = _previousOwner;
     }

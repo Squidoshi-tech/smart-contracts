@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.6.0;
 
-import "@pancakeswap/pancake-swap-lib/contracts/utils/Address.sol";
-import "@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol";
-import "./Ownable.sol";
-import "../interfaces/IUserInfoManager.sol";
+import '@openzeppelin/contracts/utils/Address.sol';
+import '@openzeppelin/contracts/math/SafeMath.sol';
+import '@openzeppelin/contracts/access/Ownable.sol';
+import '../interfaces/IUserInfoManager.sol';
 
 abstract contract UserInfoManager is Ownable {
     using Address for address;
