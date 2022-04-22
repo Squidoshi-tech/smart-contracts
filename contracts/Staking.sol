@@ -2,7 +2,7 @@
 pragma solidity 0.6.12;
 
 import "@pancakeswap/pancake-swap-lib/contracts/token/BEP20/IBEP20.sol";
-import '@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol';
+import "@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol";
 import "./utils/Ownable.sol";
 
 // This needs WORK.
@@ -56,7 +56,11 @@ contract Staking is Ownable {
     mapping(address => UserInfo) public userInfo;
 
     event Staked(address indexed user, uint256 amount, uint256 lockMode);
-    event Unstaked(address indexed user, uint256 amountBase, uint256 amountReward);
+    event Unstaked(
+        address indexed user,
+        uint256 amountBase,
+        uint256 amountReward
+    );
     event Claimed(address indexed user, uint256 amountReward);
 
     constructor(address _token, address _rewardToken) public {
@@ -75,13 +79,17 @@ contract Staking is Ownable {
     }
 
     // Returns information on the given deposit for the given address
-    function getDeposit(address _user, uint256 _depositId) external view returns (
-        uint256 tokenAmount,
-        uint256 weight,
-        uint256 lockedUntil,
-        uint256 baseFactor,
-        uint256 rewardFactor
-    ) {
+    function getDeposit(address _user, uint256 _depositId)
+        external
+        view
+        returns (
+            uint256 tokenAmount,
+            uint256 weight,
+            uint256 lockedUntil,
+            uint256 baseFactor,
+            uint256 rewardFactor
+        )
+    {
         Deposit memory stakeDeposit = userInfo[_user].deposits[_depositId];
         tokenAmount = stakeDeposit.tokenAmount;
         weight = stakeDeposit.weight;
@@ -95,7 +103,11 @@ contract Staking is Ownable {
         return userInfo[_user].deposits.length;
     }
 
-    function getPendingRewardOf(address _staker, uint256 _depositId) external view returns(uint256 whatBase, uint256 whatReward) {
+    function getPendingRewardOf(address _staker, uint256 _depositId)
+        external
+        view
+        returns (uint256 whatBase, uint256 whatReward)
+    {
         UserInfo storage user = userInfo[_staker];
         Deposit storage stakeDeposit = user.deposits[_depositId];
 
@@ -115,20 +127,32 @@ contract Staking is Ownable {
         whatReward = (rewardF * totalTokenReward) / totalSharesReward;
     }
 
-    function getUnlockSpecs(uint256 _amount, uint256 _lockMode) public view returns(uint256 lockUntil, uint256 weight) {
+    function getUnlockSpecs(uint256 _amount, uint256 _lockMode)
+        public
+        view
+        returns (uint256 lockUntil, uint256 weight)
+    {
         require(_lockMode < TOTAL_LOCK_MODES, "Staking: Invalid lock mode");
 
-        if(_lockMode == 0) {
+        if (_lockMode == 0) {
             // 0 : 7-day lock
-            return (now256() + LOCK_DUR_MIN * ONE_DAY, (_amount * (100 + rateMin)) / 100);
-        }
-        else if(_lockMode == 1) {
+            return (
+                now256() + LOCK_DUR_MIN * ONE_DAY,
+                (_amount * (100 + rateMin)) / 100
+            );
+        } else if (_lockMode == 1) {
             // 1 : 14-day lock
-            return (now256() + LOCK_DUR_MID * ONE_DAY, (_amount * (100 + rateMid)) / 100);
+            return (
+                now256() + LOCK_DUR_MID * ONE_DAY,
+                (_amount * (100 + rateMid)) / 100
+            );
         }
 
         // 2 : 31-day lock
-        return (now256() + LOCK_DUR_MAX * ONE_DAY, (_amount * (100 + rateMax)) / 100);
+        return (
+            now256() + LOCK_DUR_MAX * ONE_DAY,
+            (_amount * (100 + rateMax)) / 100
+        );
     }
 
     function now256() public view returns (uint256) {
@@ -136,7 +160,11 @@ contract Staking is Ownable {
         return block.timestamp;
     }
 
-    function updateRates(uint256 _rateMin, uint256 _rateMid, uint256 _rateMax) external onlyOwner {
+    function updateRates(
+        uint256 _rateMin,
+        uint256 _rateMid,
+        uint256 _rateMax
+    ) external onlyOwner {
         require(_rateMin < 100, "Staking: Invalid rate");
         require(_rateMid < 100, "Staking: Invalid rate");
         require(_rateMax < 100, "Staking: Invalid rate");
@@ -144,10 +172,20 @@ contract Staking is Ownable {
         rateMid = _rateMid;
         rateMax = _rateMax;
     }
+
     // Added to support recovering lost tokens that find their way to this contract
-    function recoverERC20(address _tokenAddress, uint256 _tokenAmount) external onlyOwner {
-        require(_tokenAddress != address(token), "Staking: Cannot withdraw the staking token");
-        require(_tokenAddress != address(rewardToken), "Staking: Cannot withdraw the reward token");
+    function recoverERC20(address _tokenAddress, uint256 _tokenAmount)
+        external
+        onlyOwner
+    {
+        require(
+            _tokenAddress != address(token),
+            "Staking: Cannot withdraw the staking token"
+        );
+        require(
+            _tokenAddress != address(rewardToken),
+            "Staking: Cannot withdraw the reward token"
+        );
         IBEP20(_tokenAddress).transfer(msg.sender, _tokenAmount);
     }
 
@@ -167,12 +205,16 @@ contract Staking is Ownable {
     }
 
     function claimRewardsBatch(uint256[] calldata _depositIds) external {
-        for(uint256 i = 0; i < _depositIds.length; i++) {
+        for (uint256 i = 0; i < _depositIds.length; i++) {
             _claimRewards(msg.sender, _depositIds[i]);
         }
     }
 
-    function _stake(address _staker, uint256 _amount, uint256 _lockMode) internal {
+    function _stake(
+        address _staker,
+        uint256 _amount,
+        uint256 _lockMode
+    ) internal {
         require(_amount > 0, "Staking: Deposit amount is 0");
 
         uint256 totalTokenBase = token.balanceOf(address(this));
@@ -181,8 +223,15 @@ contract Staking is Ownable {
         uint256 totalTokenReward = rewardToken.balanceOf(address(this));
         uint256 totalSharesReward = _totalSupplyReward;
 
-        uint256 actualAmount = _transferTokenFrom(address(_staker), address(this), _amount);
-        (uint256 lockUntil, uint256 scaledAmount) = getUnlockSpecs(actualAmount, _lockMode);
+        uint256 actualAmount = _transferTokenFrom(
+            address(_staker),
+            address(this),
+            _amount
+        );
+        (uint256 lockUntil, uint256 scaledAmount) = getUnlockSpecs(
+            actualAmount,
+            _lockMode
+        );
 
         uint256 whatBase;
         uint256 whatReward;
@@ -196,18 +245,19 @@ contract Staking is Ownable {
         if (totalSharesReward == 0 || totalTokenReward == 0) {
             whatReward = scaledAmount;
         } else {
-            whatReward = scaledAmount.mul(totalSharesReward).div(totalTokenReward);
+            whatReward = scaledAmount.mul(totalSharesReward).div(
+                totalTokenReward
+            );
         }
 
         // create and save the deposit (append it to deposits array)
-        Deposit memory deposit =
-            Deposit({
-                tokenAmount: actualAmount,
-                weight: scaledAmount,
-                lockedUntil: lockUntil,
-                baseFactor: whatBase,
-                rewardFactor: whatReward
-            });
+        Deposit memory deposit = Deposit({
+            tokenAmount: actualAmount,
+            weight: scaledAmount,
+            lockedUntil: lockUntil,
+            baseFactor: whatBase,
+            rewardFactor: whatReward
+        });
 
         // deposit ID is an index of the deposit in `deposits` array
         UserInfo storage user = userInfo[_staker];
@@ -236,7 +286,10 @@ contract Staking is Ownable {
         uint256 rewardF = stakeDeposit.rewardFactor;
 
         require(amount > 0, "Staking: Deposit amount is 0");
-        require(now256() > stakeDeposit.lockedUntil, "Staking: Deposit not unlocked yet");
+        require(
+            now256() > stakeDeposit.lockedUntil,
+            "Staking: Deposit not unlocked yet"
+        );
 
         uint256 totalTokenBase = token.balanceOf(address(this));
         uint256 totalSharesBase = _totalSupplyBase;
@@ -245,7 +298,9 @@ contract Staking is Ownable {
         uint256 totalSharesReward = _totalSupplyReward;
 
         uint256 whatBase = baseF.mul(totalTokenBase).div(totalSharesBase);
-        uint256 whatReward = rewardF.mul(totalTokenReward).div(totalSharesReward);
+        uint256 whatReward = rewardF.mul(totalTokenReward).div(
+            totalSharesReward
+        );
 
         // update user record
         user.tokenAmount = user.tokenAmount.sub(amount);
@@ -307,14 +362,22 @@ contract Staking is Ownable {
         emit Claimed(_staker, whatReward);
     }
 
-    function _transferTokenFrom(address _from, address _to, uint256 _value) internal returns(uint256) {
+    function _transferTokenFrom(
+        address _from,
+        address _to,
+        uint256 _value
+    ) internal returns (uint256) {
         uint256 balanceBefore = token.balanceOf(address(this));
         token.transferFrom(_from, _to, _value);
         return token.balanceOf(address(this)) - balanceBefore;
     }
 
     // Safe token transfer function, just in case if rounding error causes contract to not have enough tokens.
-    function _safeTokenTransfer(IBEP20 _token, address _to, uint256 _amount) internal {
+    function _safeTokenTransfer(
+        IBEP20 _token,
+        address _to,
+        uint256 _amount
+    ) internal {
         uint256 tokenBal = _token.balanceOf(address(this));
         if (_amount > tokenBal) {
             _token.transfer(_to, tokenBal);

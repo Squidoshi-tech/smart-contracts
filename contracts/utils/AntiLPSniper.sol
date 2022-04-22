@@ -11,7 +11,10 @@ contract AntiLPSniper is AuthorizedList {
         isBlackListed[user] = true;
     }
 
-    function updateBlacklist(address user, bool shouldBlacklist) external onlyOwner {
+    function updateBlacklist(address user, bool shouldBlacklist)
+        external
+        onlyOwner
+    {
         isBlackListed[user] = shouldBlacklist;
     }
 

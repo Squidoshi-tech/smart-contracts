@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.6.0;
 
-import '@pancakeswap/pancake-swap-lib/contracts/utils/Address.sol';
-import '@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol';
+import "@pancakeswap/pancake-swap-lib/contracts/utils/Address.sol";
+import "@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol";
 import "./Ownable.sol";
 import "../interfaces/IUserInfoManager.sol";
 
@@ -20,19 +20,29 @@ abstract contract UserInfoManager is Ownable {
 
     mapping(address => User) internal hodlerInfo;
 
-    function logTransfer(address payable from, uint256 fromBalance, address payable to, uint256 toBalance) public virtual onlyOwner {
+    function logTransfer(
+        address payable from,
+        uint256 fromBalance,
+        address payable to,
+        uint256 toBalance
+    ) public virtual onlyOwner {
         _logTransfer(from, fromBalance, to, toBalance);
     }
 
-    function _logTransfer(address payable from, uint256 fromBalance, address payable to, uint256 toBalance) internal virtual {
+    function _logTransfer(
+        address payable from,
+        uint256 fromBalance,
+        address payable to,
+        uint256 toBalance
+    ) internal virtual {
         hodlerInfo[from].tokenBalance = fromBalance;
         hodlerInfo[from].lastTransfer = block.timestamp;
-        if(!hodlerInfo[from].exists){
+        if (!hodlerInfo[from].exists) {
             hodlerInfo[from].exists = true;
         }
         hodlerInfo[to].tokenBalance = toBalance;
         hodlerInfo[to].lastReceive = block.timestamp;
-        if(!hodlerInfo[to].exists){
+        if (!hodlerInfo[to].exists) {
             hodlerInfo[to].exists = true;
         }
     }

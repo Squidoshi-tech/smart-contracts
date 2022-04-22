@@ -4,7 +4,7 @@ pragma solidity ^0.6.0;
 abstract contract LockableFunction {
     bool internal locked;
 
-    modifier lockFunction {
+    modifier lockFunction() {
         locked = true;
         _;
         locked = false;

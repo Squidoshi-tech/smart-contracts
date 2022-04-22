@@ -6,18 +6,21 @@ There are far too many uses for the LP swapping pool.
 Rather than rewrite them, this contract performs them for us and uses both generic and specific calls.
 -The Dev
 */
-import '@pancakeswap/pancake-swap-lib/contracts/token/BEP20/IBEP20.sol';
-import '@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol';
-import '@pancakeswap-libs/pancake-swap-core/contracts/interfaces/IPancakePair.sol';
-import '@pancakeswap-libs/pancake-swap-core/contracts/interfaces/IPancakeFactory.sol';
-import './pancakeswap-peripheral/contracts/interfaces/IPancakeRouter02.sol';
+import "@pancakeswap/pancake-swap-lib/contracts/token/BEP20/IBEP20.sol";
+import "@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol";
+import "@pancakeswap-libs/pancake-swap-core/contracts/interfaces/IPancakePair.sol";
+import "@pancakeswap-libs/pancake-swap-core/contracts/interfaces/IPancakeFactory.sol";
+import "./pancakeswap-peripheral/contracts/interfaces/IPancakeRouter02.sol";
 import "./AuthorizedList.sol";
 
 abstract contract LPSwapSupport is AuthorizedList {
     using SafeMath for uint256;
     event UpdateRouter(address indexed newAddress, address indexed oldAddress);
     event UpdatePair(address indexed newAddress, address indexed oldAddress);
-    event UpdateLPReceiver(address indexed newAddress, address indexed oldAddress);
+    event UpdateLPReceiver(
+        address indexed newAddress,
+        address indexed oldAddress
+    );
     event SwapAndLiquifyEnabledUpdated(bool enabled);
 
     event SwapAndLiquify(
@@ -26,7 +29,7 @@ abstract contract LPSwapSupport is AuthorizedList {
         uint256 tokensIntoLiqudity
     );
 
-    modifier lockTheSwap {
+    modifier lockTheSwap() {
         inSwap = true;
         _;
         inSwap = false;
@@ -43,32 +46,49 @@ abstract contract LPSwapSupport is AuthorizedList {
     address public liquidityReceiver = deadAddress;
     address public deadAddress = 0x000000000000000000000000000000000000dEaD;
 
-    function _approve(address owner, address spender, uint256 tokenAmount) internal virtual;
+    function _approve(
+        address owner,
+        address spender,
+        uint256 tokenAmount
+    ) internal virtual;
 
     function updateRouter(address newAddress) public authorized {
-        require(newAddress != address(pancakeRouter), "The router is already set to this address");
+        require(
+            newAddress != address(pancakeRouter),
+            "The router is already set to this address"
+        );
         emit UpdateRouter(newAddress, address(pancakeRouter));
         pancakeRouter = IPancakeRouter02(newAddress);
     }
 
-    function updateLiquidityReceiver(address receiverAddress) external onlyOwner{
-        require(receiverAddress != liquidityReceiver, "LP is already sent to that address");
+    function updateLiquidityReceiver(address receiverAddress)
+        external
+        onlyOwner
+    {
+        require(
+            receiverAddress != liquidityReceiver,
+            "LP is already sent to that address"
+        );
         emit UpdateLPReceiver(receiverAddress, liquidityReceiver);
         liquidityReceiver = receiverAddress;
     }
 
     function updateRouterAndPair(address newAddress) public virtual authorized {
-        if(newAddress != address(pancakeRouter)){
+        if (newAddress != address(pancakeRouter)) {
             updateRouter(newAddress);
         }
-        address _pancakeswapV2Pair = IPancakeFactory(pancakeRouter.factory()).createPair(address(this), pancakeRouter.WETH());
-        if(_pancakeswapV2Pair != pancakePair){
+        address _pancakeswapV2Pair = IPancakeFactory(pancakeRouter.factory())
+            .createPair(address(this), pancakeRouter.WETH());
+        if (_pancakeswapV2Pair != pancakePair) {
             updateLPPair(_pancakeswapV2Pair);
         }
     }
 
     function updateLPPair(address newAddress) public virtual authorized {
-        require(newAddress != pancakePair, "The LP Pair is already set to this address");
+        require(
+            newAddress != pancakePair,
+            "The LP Pair is already set to this address"
+        );
         emit UpdatePair(newAddress, pancakePair);
         pancakePair = newAddress;
     }
@@ -105,14 +125,17 @@ abstract contract LPSwapSupport is AuthorizedList {
         swapTokensForCurrencyAdv(address(this), tokenAmount, address(this));
     }
 
-    function swapTokensForCurrencyAdv(address tokenAddress, uint256 tokenAmount, address destination) internal {
-
+    function swapTokensForCurrencyAdv(
+        address tokenAddress,
+        uint256 tokenAmount,
+        address destination
+    ) internal {
         // generate the uniswap pair path of token -> weth
         address[] memory path = new address[](2);
         path[0] = tokenAddress;
         path[1] = pancakeRouter.WETH();
 
-        if(tokenAddress != address(this)){
+        if (tokenAddress != address(this)) {
             IBEP20(tokenAddress).approve(address(pancakeRouter), tokenAmount);
         } else {
             _approve(address(this), address(pancakeRouter), tokenAmount);
@@ -129,7 +152,6 @@ abstract contract LPSwapSupport is AuthorizedList {
     }
 
     function addLiquidity(uint256 tokenAmount, uint256 cAmount) private {
-
         // approve token transfer to cover all possible scenarios
         _approve(address(this), address(pancakeRouter), tokenAmount);
 
@@ -148,29 +170,35 @@ abstract contract LPSwapSupport is AuthorizedList {
         swapCurrencyForTokensAdv(address(this), amount, address(this));
     }
 
-    function swapCurrencyForTokensAdv(address tokenAddress, uint256 amount, address destination) internal {
+    function swapCurrencyForTokensAdv(
+        address tokenAddress,
+        uint256 amount,
+        address destination
+    ) internal {
         // generate the pair path of token
         address[] memory path = new address[](2);
         path[0] = pancakeRouter.WETH();
         path[1] = tokenAddress;
-        if(amount > address(this).balance){
+        if (amount > address(this).balance) {
             amount = address(this).balance;
         }
-        if(amount > maxSpendAmount){
+        if (amount > maxSpendAmount) {
             amount = maxSpendAmount;
         }
-        if(amount < minSpendAmount) {return;}
+        if (amount < minSpendAmount) {
+            return;
+        }
 
         // make the swap
-        pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: amount}(
-            0,
-            path,
-            destination,
-            block.timestamp.add(400)
-        );
+        pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{
+            value: amount
+        }(0, path, destination, block.timestamp.add(400));
     }
 
-    function updateSwapRange(uint256 minAmount, uint256 maxAmount) external authorized {
+    function updateSwapRange(uint256 minAmount, uint256 maxAmount)
+        external
+        authorized
+    {
         require(minAmount <= maxAmount, "Minimum must be less than maximum");
         minSpendAmount = minAmount;
         maxSpendAmount = maxAmount;

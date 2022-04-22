@@ -4,9 +4,12 @@ pragma solidity ^0.6.0;
 import "./utils/AuthorizedList.sol";
 import "./utils/LPSwapSupport.sol";
 
-abstract contract SmartBuyback is AuthorizedList, LPSwapSupport{
+abstract contract SmartBuyback is AuthorizedList, LPSwapSupport {
     event BuybackTriggered(uint256 amountSpent);
-    event BuybackReceiverUpdated(address indexed oldReceiver, address indexed newReceiver);
+    event BuybackReceiverUpdated(
+        address indexed oldReceiver,
+        address indexed newReceiver
+    );
 
     uint256 public minAutoBuyback = 0.05 ether;
     uint256 public maxAutoBuyback = 10 ether;
@@ -20,24 +23,40 @@ abstract contract SmartBuyback is AuthorizedList, LPSwapSupport{
     uint256 private lastBuybackTime;
     uint256 private lastBuyPoolSize;
 
-    function shouldBuyback(uint256 poolTokens, uint256 sellAmount) public view returns(bool){
-        return (poolTokens.mul(significantLPBuyPct).div(significantLPBuyPctDivisor) >= sellAmount && autoBuybackEnabled
-            && address(this).balance >= minAutoBuyback) || (autoBuybackAtCap && address(this).balance >= maxAutoBuyback);
+    function shouldBuyback(uint256 poolTokens, uint256 sellAmount)
+        public
+        view
+        returns (bool)
+    {
+        return
+            (poolTokens.mul(significantLPBuyPct).div(
+                significantLPBuyPctDivisor
+            ) >=
+                sellAmount &&
+                autoBuybackEnabled &&
+                address(this).balance >= minAutoBuyback) ||
+            (autoBuybackAtCap && address(this).balance >= maxAutoBuyback);
     }
 
     function doBuyback(uint256 poolTokens, uint256 sellAmount) internal {
-        if(autoBuybackEnabled && !inSwap && address(this).balance >= minAutoBuyback)
-            _doBuyback(poolTokens, sellAmount);
+        if (
+            autoBuybackEnabled &&
+            !inSwap &&
+            address(this).balance >= minAutoBuyback
+        ) _doBuyback(poolTokens, sellAmount);
     }
 
-    function _doBuyback(uint256 poolTokens, uint256 sellAmount) private lockTheSwap {
+    function _doBuyback(uint256 poolTokens, uint256 sellAmount)
+        private
+        lockTheSwap
+    {
         uint256 lpMin = minSpendAmount;
         uint256 lpMax = maxSpendAmount;
         minSpendAmount = minAutoBuyback;
         maxSpendAmount = maxAutoBuyback;
-        if(autoBuybackAtCap && address(this).balance >= maxAutoBuyback){
+        if (autoBuybackAtCap && address(this).balance >= maxAutoBuyback) {
             simpleBuyback(poolTokens, 0);
-        } else if(doSimpleBuyback){
+        } else if (doSimpleBuyback) {
             simpleBuyback(poolTokens, sellAmount);
         } else {
             dynamicBuyback(poolTokens, sellAmount);
@@ -58,9 +77,11 @@ abstract contract SmartBuyback is AuthorizedList, LPSwapSupport{
     }
 
     function simpleBuyback(uint256 poolTokens, uint256 sellAmount) private {
-        uint256 amount = address(this).balance > maxAutoBuyback ? maxAutoBuyback : address(this).balance;
-        if(amount >= minAutoBuyback){
-            if(sellAmount == 0){
+        uint256 amount = address(this).balance > maxAutoBuyback
+            ? maxAutoBuyback
+            : address(this).balance;
+        if (amount >= minAutoBuyback) {
+            if (sellAmount == 0) {
                 amount = minAutoBuyback;
             }
             swapCurrencyForTokensAdv(address(this), amount, buybackReceiver);
@@ -72,12 +93,16 @@ abstract contract SmartBuyback is AuthorizedList, LPSwapSupport{
     }
 
     function dynamicBuyback(uint256 poolTokens, uint256 sellAmount) private {
-        if(lastBuybackTime == 0){
+        if (lastBuybackTime == 0) {
             simpleBuyback(poolTokens, sellAmount);
         }
-        uint256 amount = sellAmount.mul(address(pancakePair).balance).div(poolTokens);
-        if(lastBuyPoolSize < poolTokens){
-            amount = amount.add(amount.mul(poolTokens).div(poolTokens.add(lastBuyPoolSize)));
+        uint256 amount = sellAmount.mul(address(pancakePair).balance).div(
+            poolTokens
+        );
+        if (lastBuyPoolSize < poolTokens) {
+            amount = amount.add(
+                amount.mul(poolTokens).div(poolTokens.add(lastBuyPoolSize))
+            );
         }
 
         swapCurrencyForTokensAdv(address(this), amount, buybackReceiver);
@@ -87,25 +112,35 @@ abstract contract SmartBuyback is AuthorizedList, LPSwapSupport{
         lastBuyPoolSize = poolTokens;
     }
 
-    function enableAutoBuybacks(bool enable, bool autoBuybackAtCapEnabled) external authorized {
+    function enableAutoBuybacks(bool enable, bool autoBuybackAtCapEnabled)
+        external
+        authorized
+    {
         autoBuybackEnabled = enable;
         autoBuybackAtCap = autoBuybackAtCapEnabled;
     }
 
-    function updateBuybackSettings(uint256 lpSizePct, uint256 pctDivisor, bool simpleBuybacksOnly) external authorized{
+    function updateBuybackSettings(
+        uint256 lpSizePct,
+        uint256 pctDivisor,
+        bool simpleBuybacksOnly
+    ) external authorized {
         significantLPBuyPct = lpSizePct;
         significantLPBuyPctDivisor = pctDivisor;
         doSimpleBuyback = simpleBuybacksOnly;
     }
 
-    function updateBuybackLimits(uint256 minBuyAmount, uint256 maxBuyAmount) external authorized {
+    function updateBuybackLimits(uint256 minBuyAmount, uint256 maxBuyAmount)
+        external
+        authorized
+    {
         minAutoBuyback = minBuyAmount;
         maxAutoBuyback = maxBuyAmount;
     }
 
     function forceBuyback(uint256 amount) external authorized {
         require(address(this).balance >= amount);
-        if(!inSwap){
+        if (!inSwap) {
             _doBuybackNoLimits(amount);
         }
     }
