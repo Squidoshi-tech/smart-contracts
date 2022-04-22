@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.6.12;
 
-import "@pancakeswap/pancake-swap-lib/contracts/token/BEP20/IBEP20.sol";
-import "@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol";
-import "./utils/Ownable.sol";
+import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
+import '@openzeppelin/contracts/math/SafeMath.sol';
+import './utils/Ownable.sol';
 
 // This needs WORK.
 
@@ -38,8 +38,8 @@ contract Staking is Ownable {
     uint256 public usersLockingWeight;
 
     // The base & reward token
-    IBEP20 public immutable token;
-    IBEP20 public immutable rewardToken;
+    IERC20 public immutable token;
+    IERC20 public immutable rewardToken;
 
     // the reward rates
     uint256 public rateMin;
@@ -56,16 +56,12 @@ contract Staking is Ownable {
     mapping(address => UserInfo) public userInfo;
 
     event Staked(address indexed user, uint256 amount, uint256 lockMode);
-    event Unstaked(
-        address indexed user,
-        uint256 amountBase,
-        uint256 amountReward
-    );
+    event Unstaked(address indexed user, uint256 amountBase, uint256 amountReward);
     event Claimed(address indexed user, uint256 amountReward);
 
     constructor(address _token, address _rewardToken) public {
-        token = IBEP20(_token);
-        rewardToken = IBEP20(_rewardToken);
+        token = IERC20(_token);
+        rewardToken = IERC20(_rewardToken);
     }
 
     // Returns total staked token balance for the given address
@@ -115,7 +111,7 @@ contract Staking is Ownable {
         uint256 baseF = stakeDeposit.baseFactor;
         uint256 rewardF = stakeDeposit.rewardFactor;
 
-        require(amount > 0, "Staking: Deposit amount is 0");
+        require(amount > 0, 'Staking: Deposit amount is 0');
 
         uint256 totalTokenBase = token.balanceOf(address(this));
         uint256 totalSharesBase = _totalSupplyBase;
@@ -132,27 +128,18 @@ contract Staking is Ownable {
         view
         returns (uint256 lockUntil, uint256 weight)
     {
-        require(_lockMode < TOTAL_LOCK_MODES, "Staking: Invalid lock mode");
+        require(_lockMode < TOTAL_LOCK_MODES, 'Staking: Invalid lock mode');
 
         if (_lockMode == 0) {
             // 0 : 7-day lock
-            return (
-                now256() + LOCK_DUR_MIN * ONE_DAY,
-                (_amount * (100 + rateMin)) / 100
-            );
+            return (now256() + LOCK_DUR_MIN * ONE_DAY, (_amount * (100 + rateMin)) / 100);
         } else if (_lockMode == 1) {
             // 1 : 14-day lock
-            return (
-                now256() + LOCK_DUR_MID * ONE_DAY,
-                (_amount * (100 + rateMid)) / 100
-            );
+            return (now256() + LOCK_DUR_MID * ONE_DAY, (_amount * (100 + rateMid)) / 100);
         }
 
         // 2 : 31-day lock
-        return (
-            now256() + LOCK_DUR_MAX * ONE_DAY,
-            (_amount * (100 + rateMax)) / 100
-        );
+        return (now256() + LOCK_DUR_MAX * ONE_DAY, (_amount * (100 + rateMax)) / 100);
     }
 
     function now256() public view returns (uint256) {
@@ -165,28 +152,19 @@ contract Staking is Ownable {
         uint256 _rateMid,
         uint256 _rateMax
     ) external onlyOwner {
-        require(_rateMin < 100, "Staking: Invalid rate");
-        require(_rateMid < 100, "Staking: Invalid rate");
-        require(_rateMax < 100, "Staking: Invalid rate");
+        require(_rateMin < 100, 'Staking: Invalid rate');
+        require(_rateMid < 100, 'Staking: Invalid rate');
+        require(_rateMax < 100, 'Staking: Invalid rate');
         rateMin = _rateMin;
         rateMid = _rateMid;
         rateMax = _rateMax;
     }
 
     // Added to support recovering lost tokens that find their way to this contract
-    function recoverERC20(address _tokenAddress, uint256 _tokenAmount)
-        external
-        onlyOwner
-    {
-        require(
-            _tokenAddress != address(token),
-            "Staking: Cannot withdraw the staking token"
-        );
-        require(
-            _tokenAddress != address(rewardToken),
-            "Staking: Cannot withdraw the reward token"
-        );
-        IBEP20(_tokenAddress).transfer(msg.sender, _tokenAmount);
+    function recoverERC20(address _tokenAddress, uint256 _tokenAmount) external onlyOwner {
+        require(_tokenAddress != address(token), 'Staking: Cannot withdraw the staking token');
+        require(_tokenAddress != address(rewardToken), 'Staking: Cannot withdraw the reward token');
+        IERC20(_tokenAddress).transfer(msg.sender, _tokenAmount);
     }
 
     // Stake tokens
@@ -215,7 +193,7 @@ contract Staking is Ownable {
         uint256 _amount,
         uint256 _lockMode
     ) internal {
-        require(_amount > 0, "Staking: Deposit amount is 0");
+        require(_amount > 0, 'Staking: Deposit amount is 0');
 
         uint256 totalTokenBase = token.balanceOf(address(this));
         uint256 totalSharesBase = _totalSupplyBase;
@@ -223,15 +201,8 @@ contract Staking is Ownable {
         uint256 totalTokenReward = rewardToken.balanceOf(address(this));
         uint256 totalSharesReward = _totalSupplyReward;
 
-        uint256 actualAmount = _transferTokenFrom(
-            address(_staker),
-            address(this),
-            _amount
-        );
-        (uint256 lockUntil, uint256 scaledAmount) = getUnlockSpecs(
-            actualAmount,
-            _lockMode
-        );
+        uint256 actualAmount = _transferTokenFrom(address(_staker), address(this), _amount);
+        (uint256 lockUntil, uint256 scaledAmount) = getUnlockSpecs(actualAmount, _lockMode);
 
         uint256 whatBase;
         uint256 whatReward;
@@ -245,9 +216,7 @@ contract Staking is Ownable {
         if (totalSharesReward == 0 || totalTokenReward == 0) {
             whatReward = scaledAmount;
         } else {
-            whatReward = scaledAmount.mul(totalSharesReward).div(
-                totalTokenReward
-            );
+            whatReward = scaledAmount.mul(totalSharesReward).div(totalTokenReward);
         }
 
         // create and save the deposit (append it to deposits array)
@@ -285,11 +254,8 @@ contract Staking is Ownable {
         uint256 baseF = stakeDeposit.baseFactor;
         uint256 rewardF = stakeDeposit.rewardFactor;
 
-        require(amount > 0, "Staking: Deposit amount is 0");
-        require(
-            now256() > stakeDeposit.lockedUntil,
-            "Staking: Deposit not unlocked yet"
-        );
+        require(amount > 0, 'Staking: Deposit amount is 0');
+        require(now256() > stakeDeposit.lockedUntil, 'Staking: Deposit not unlocked yet');
 
         uint256 totalTokenBase = token.balanceOf(address(this));
         uint256 totalSharesBase = _totalSupplyBase;
@@ -298,9 +264,7 @@ contract Staking is Ownable {
         uint256 totalSharesReward = _totalSupplyReward;
 
         uint256 whatBase = baseF.mul(totalTokenBase).div(totalSharesBase);
-        uint256 whatReward = rewardF.mul(totalTokenReward).div(
-            totalSharesReward
-        );
+        uint256 whatReward = rewardF.mul(totalTokenReward).div(totalSharesReward);
 
         // update user record
         user.tokenAmount = user.tokenAmount.sub(amount);
@@ -332,7 +296,7 @@ contract Staking is Ownable {
         uint256 scaledAmount = stakeDeposit.weight;
         uint256 rewardF = stakeDeposit.rewardFactor;
 
-        require(amount > 0, "Staking: Deposit amount is 0");
+        require(amount > 0, 'Staking: Deposit amount is 0');
 
         uint256 totalTokenReward = rewardToken.balanceOf(address(this));
         uint256 totalSharesReward = _totalSupplyReward;
@@ -374,7 +338,7 @@ contract Staking is Ownable {
 
     // Safe token transfer function, just in case if rounding error causes contract to not have enough tokens.
     function _safeTokenTransfer(
-        IBEP20 _token,
+        IERC20 _token,
         address _to,
         uint256 _amount
     ) internal {
