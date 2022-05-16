@@ -3,7 +3,9 @@ pragma solidity 0.6.12;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import '@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol';
+import "@openzeppelin/contracts/math/SafeMath.sol";
+
+import './utils/pancakeswap-peripheral/contracts/interfaces/IPancakeRouter02.sol';
 
 contract Staking is Ownable {
     using SafeMath for uint256;
@@ -26,7 +28,7 @@ contract Staking is Ownable {
 
     uint256 public constant ONE_DAY = 1 days;
     uint256 public constant MULTIPLIER = 1e12;
-
+    
     uint256 public constant TOTAL_LOCK_MODES = 4;
     uint256 public constant LOCK_DUR_MIN = 7 * ONE_DAY;
     uint256 public constant LOCK_DUR_MID = 14 * ONE_DAY;
@@ -45,6 +47,9 @@ contract Staking is Ownable {
     // The alt reward token
     IERC20 public immutable tokenAlt;
 
+    // Pancake router
+    IPancakeRouter02 public pancakeRouter;
+
     // the reward rates
     uint256 public rateMin;
     uint256 public rateMid;
@@ -62,12 +67,16 @@ contract Staking is Ownable {
     event Claimed(address indexed user, uint256 rewardAmount, uint256 rewardAmountAlt);
     event RatesUpdated(uint256 rateMin, uint256 rateMid, uint256 rateMax);
 
+    event autoBuy(address indexed user, uint256 rewardAmount, uint256 rewardAmountAlt, uint256 amountStaked);
+
+
     constructor(
         IERC20 _token,
         IERC20 _tokenAlt,
         uint256 _rateMin,
         uint256 _rateMid,
-        uint256 _rateMax
+        uint256 _rateMax,
+        IPancakeRouter02 router
     ) public {
         token = _token;
         tokenAlt = _tokenAlt;
@@ -75,6 +84,8 @@ contract Staking is Ownable {
         rateMin = _rateMin;
         rateMid = _rateMid;
         rateMax = _rateMax;
+
+        pancakeRouter = router;
     }
 
     // Returns total staked token balance for the given address
@@ -112,7 +123,6 @@ contract Staking is Ownable {
         UserInfo storage user = userInfo[_staker];
         Deposit storage stakeDeposit = user.deposits[_depositId];
 
-        uint256 _amount = stakeDeposit.tokenAmount;
         uint256 _weight = stakeDeposit.weight;
         uint256 _rewardDebt = stakeDeposit.rewardDebt;
         uint256 _rewardDebtAlt = stakeDeposit.rewardDebtAlt;
@@ -138,15 +148,15 @@ contract Staking is Ownable {
         }
         else if(_lockMode == 1) {
             // 1 : 7-day lock
-            return (now256() + LOCK_DUR_MIN * ONE_DAY, (_amount * (100 + rateMin)) / 100);
+            return (now256() + LOCK_DUR_MIN, (_amount * (100 + rateMin)) / 100);
         }
         else if(_lockMode == 2) {
             // 2 : 14-day lock
-            return (now256() + LOCK_DUR_MID * ONE_DAY, (_amount * (100 + rateMid)) / 100);
+            return (now256() + LOCK_DUR_MID, (_amount * (100 + rateMid)) / 100);
         }
 
         // 3 : 31-day lock
-        return (now256() + LOCK_DUR_MAX * ONE_DAY, (_amount * (100 + rateMax)) / 100);
+        return (now256() + LOCK_DUR_MAX, (_amount * (100 + rateMax)) / 100);
     }
 
     function now256() public view returns (uint256) {
@@ -165,6 +175,10 @@ contract Staking is Ownable {
         emit RatesUpdated(_rateMin, _rateMid, _rateMax);
     }
 
+    function updateRouter(IPancakeRouter02 newRouter) external onlyOwner {
+        pancakeRouter = newRouter;
+    }
+
     // Added to support recovering lost tokens that find their way to this contract
     function recoverERC20(address _tokenAddress, uint256 _tokenAmount) external onlyOwner {
         require(_tokenAddress != address(token), "TKNStaking: Cannot withdraw the staking token");
@@ -179,7 +193,9 @@ contract Staking is Ownable {
 
     // Stake tokens
     function stake(uint256 _amount, uint256 _lockMode) external {
-        _stake(msg.sender, _amount, _lockMode);
+        _sync();
+        uint256 _actualAmount = _transferTokenFrom(msg.sender, address(this), _amount);
+        _stake(msg.sender, _actualAmount, _lockMode);
     }
 
     // Unstake tokens and claim rewards
@@ -189,18 +205,52 @@ contract Staking is Ownable {
 
     // Claim rewards
     function claimRewards(uint256 _depositId) external {
-        _claimRewards(msg.sender, _depositId);
+        _sync();
+
+        (uint256 _rewardAmount, uint256 _rewardAmountAlt) = _claimRewards(msg.sender, _depositId);
+
+        // return tokens back to holder
+        _safeTokenTransfer(msg.sender, _rewardAmount);
+        _safeTokenTransferAlt(msg.sender, _rewardAmountAlt);
+        emit Claimed(msg.sender, _rewardAmount, _rewardAmountAlt);
     }
 
     function claimRewardsBatch(uint256[] calldata _depositIds) external {
+        _sync();
+
+        uint256 _rewardAmount;
+        uint256 _rewardAmountAlt;
+
         for(uint256 i = 0; i < _depositIds.length; i++) {
-            _claimRewards(msg.sender, _depositIds[i]);
+            (uint256 _rewardAmountI, uint256 _rewardAmountAltI) = _claimRewards(msg.sender, _depositIds[i]);
+            _rewardAmount += _rewardAmountI;
+            _rewardAmountAlt += _rewardAmountAltI;
         }
+
+        _safeTokenTransfer(msg.sender, _rewardAmount);
+        _safeTokenTransferAlt(msg.sender, _rewardAmountAlt);
+        emit Claimed(msg.sender, _rewardAmount, _rewardAmountAlt);
     }
 
     // TODO
-    function autoBuyUsingRewards(uint256[] calldata _depositIds) external {
-        // buys SQDI with all BUSD rewards earned by the user, and stakes them
+    function autoBuyUsingRewards(uint256[] calldata _depositIds, uint256 _lockMode) external {
+        _sync();
+
+        uint256 _rewardAmount;
+        uint256 _rewardAmountAlt;
+
+        for(uint256 i = 0; i < _depositIds.length; i++) {
+            (uint256 _rewardAmountI, uint256 _rewardAmountAltI) = _claimRewards(msg.sender, _depositIds[i]);
+            _rewardAmount += _rewardAmountI;
+            _rewardAmountAlt += _rewardAmountAltI;
+        }
+
+        uint256 balanceBefore = token.balanceOf(address(this));
+        _swapAltForToken(_rewardAmountAlt);
+        uint256 _actualAmount = token.balanceOf(address(this)) - balanceBefore;
+        _stake(msg.sender, _rewardAmount + _actualAmount, _lockMode);
+
+        emit autoBuy(msg.sender, _rewardAmount, _rewardAmountAlt, _rewardAmount + _actualAmount);
     }
 
     // Unstake tokens withdraw without caring about rewards. EMERGENCY ONLY.
@@ -223,13 +273,11 @@ contract Staking is Ownable {
         accTokenPerUnitWeightAlt += (tokenRewardAlt * MULTIPLIER) / _weightLocked;
     }
 
-    function _stake(address _staker, uint256 _userAmount, uint256 _lockMode) internal {
-        _sync();
+    function _stake(address _staker, uint256 _amount, uint256 _lockMode) internal {
+
+        require(_amount > 0, "TKNStaking: Deposit amount is 0");
 
         UserInfo storage user = userInfo[_staker];
-
-        uint256 _amount = _transferTokenFrom(address(_staker), address(this), _userAmount);
-        require(_amount > 0, "TKNStaking: Deposit amount is 0");
 
         (uint256 lockUntil, uint256 stakeWeight) = getUnlockSpecs(_amount, _lockMode);
 
@@ -301,7 +349,7 @@ contract Staking is Ownable {
         emit Unstaked(_staker, _amount);
     }
 
-    function _claimRewards(address _staker, uint256 _depositId) internal {
+    function _claimRewards(address _staker, uint256 _depositId) internal returns (uint256, uint256) {
         UserInfo storage user = userInfo[_staker];
         Deposit storage stakeDeposit = user.deposits[_depositId];
 
@@ -311,7 +359,6 @@ contract Staking is Ownable {
         uint256 _rewardDebtAlt = stakeDeposit.rewardDebtAlt;
 
         require(_amount > 0, "TKNStaking: Deposit amount is 0");
-        _sync();
 
         uint256 _rewardAmount = ((_weight * accTokenPerUnitWeight) / MULTIPLIER) - _rewardDebt;
         uint256 _rewardAmountAlt = ((_weight * accTokenPerUnitWeightAlt) / MULTIPLIER) - _rewardDebtAlt;
@@ -328,10 +375,25 @@ contract Staking is Ownable {
         unclaimedTokenRewards -= _rewardAmount;
         unclaimedTokenRewardsAlt -= _rewardAmountAlt;
 
-        // return tokens back to holder
-        _safeTokenTransfer(_staker, _rewardAmount);
-        _safeTokenTransferAlt(_staker, _rewardAmountAlt);
-        emit Claimed(_staker, _rewardAmount, _rewardAmountAlt);
+        return (_rewardAmount, _rewardAmountAlt);
+    }
+
+    function _swapAltForToken(uint256 _rewardAmountAlt) internal {
+
+        address[] memory path = new address[](2);
+        path[0] = address(tokenAlt);
+        path[1] = address(token);
+
+        tokenAlt.approve(address(pancakeRouter), _rewardAmountAlt);
+
+        // make the swap
+        pancakeRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            _rewardAmountAlt,
+            0, // accept any amount of token
+            path,
+            address(this),
+            block.timestamp
+        );
     }
 
     function _transferTokenFrom(address _from, address _to, uint256 _value) internal returns (uint256) {

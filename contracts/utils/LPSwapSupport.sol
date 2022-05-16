@@ -6,12 +6,24 @@ There are far too many uses for the LP swapping pool.
 Rather than rewrite them, this contract performs them for us and uses both generic and specific calls.
 -The Dev
 */
-import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
-import '@openzeppelin/contracts/math/SafeMath.sol';
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol";
 //import '@pancakeswap-libs/pancake-swap-core/contracts/interfaces/IPancakePair.sol';
 //import '@pancakeswap-libs/pancake-swap-core/contracts/interfaces/IPancakeFactory.sol';
-import './pancakeswap-peripheral/contracts/interfaces/IPancakeRouter02.sol';
-import './AuthorizedList.sol';
+import "./pancakeswap-peripheral/contracts/interfaces/IPancakeRouter02.sol";
+import "./AuthorizedList.sol";
+
+contract TempRewardReceiver is Ownable {
+    function transfer(
+        address token,
+        address recipient,
+        uint256 amount
+    ) external onlyOwner {
+        IERC20(token).transfer(recipient, amount);
+    }
+}
 
 interface IPancakePair {
     event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -146,13 +158,19 @@ abstract contract LPSwapSupport is AuthorizedList {
     bool internal inSwap;
     bool public swapsEnabled = true;
 
-    uint256 public minSpendAmount = 0.001 ether;
-    uint256 public maxSpendAmount = 1 ether;
+    uint256 public minSpendAmount = 1 ether;
+    uint256 public maxSpendAmount = 1000 ether;
 
     IPancakeRouter02 public pancakeRouter;
+    IERC20 public BUSD;
     address public pancakePair;
     address public liquidityReceiver = deadAddress;
     address public deadAddress = 0x000000000000000000000000000000000000dEaD;
+    TempRewardReceiver public tempRewardReceiver;
+
+    constructor() public {
+        tempRewardReceiver = new TempRewardReceiver();
+    }
 
     function _approve(
         address owner,
@@ -160,8 +178,13 @@ abstract contract LPSwapSupport is AuthorizedList {
         uint256 tokenAmount
     ) internal virtual;
 
+    function addBUSDAddress(address newAddress) public authorized {
+        require(newAddress != address(0));
+        BUSD = IERC20(newAddress);
+    }
+
     function updateRouter(address newAddress) public authorized {
-        require(newAddress != address(pancakeRouter), 'already set');
+        require(newAddress != address(pancakeRouter));
         emit UpdateRouter(newAddress, address(pancakeRouter));
         pancakeRouter = IPancakeRouter02(newAddress);
     }
@@ -172,21 +195,21 @@ abstract contract LPSwapSupport is AuthorizedList {
         liquidityReceiver = receiverAddress;
     }
 
-    function updateRouterAndPair(address newAddress) public virtual authorized {
-        if (newAddress != address(pancakeRouter)) {
-            updateRouter(newAddress);
-        }
-        address _pancakeswapV2Pair = IPancakeFactory(pancakeRouter.factory()).createPair(
-            address(this),
-            pancakeRouter.WETH()
-        );
-        if (_pancakeswapV2Pair != pancakePair) {
-            updateLPPair(_pancakeswapV2Pair);
-        }
-    }
+    // function updateRouterAndPair(address newAddress) public virtual authorized {
+    //     if (newAddress != address(pancakeRouter)) {
+    //         updateRouter(newAddress);
+    //     }
+    //     address _pancakeswapV2Pair = IPancakeFactory(pancakeRouter.factory()).createPair(
+    //         address(this),
+    //         pancakeRouter.WETH()
+    //     );
+    //     if (_pancakeswapV2Pair != pancakePair) {
+    //         updateLPPair(_pancakeswapV2Pair);
+    //     }
+    // }
 
     function updateLPPair(address newAddress) public virtual authorized {
-        require(newAddress != pancakePair, 'already set');
+        require(newAddress != pancakePair);
         emit UpdatePair(newAddress, pancakePair);
         pancakePair = newAddress;
     }
@@ -205,17 +228,16 @@ abstract contract LPSwapSupport is AuthorizedList {
         // this is so that we can capture exactly the amount of ETH that the
         // swap creates, and not make the liquidity event include any ETH that
         // has been manually sent to the contract
-        uint256 initialBalance = address(this).balance;
+        uint256 initialBalance = BUSD.balanceOf(address(this));
 
         // swap tokens for
         swapTokensForCurrency(half);
 
         // how much did we just swap into?
-        uint256 newBalance = address(this).balance.sub(initialBalance);
+        uint256 newBalance = BUSD.balanceOf(address(this)).sub(initialBalance);
 
         // add liquidity to uniswap
         addLiquidity(otherHalf, newBalance);
-
         emit SwapAndLiquify(half, newBalance, otherHalf);
     }
 
@@ -228,38 +250,53 @@ abstract contract LPSwapSupport is AuthorizedList {
         uint256 tokenAmount,
         address destination
     ) internal {
-        // generate the uniswap pair path of token -> weth
-        address[] memory path = new address[](2);
-        path[0] = tokenAddress;
-        path[1] = pancakeRouter.WETH();
-
         if (tokenAddress != address(this)) {
             IERC20(tokenAddress).approve(address(pancakeRouter), tokenAmount);
         } else {
             _approve(address(this), address(pancakeRouter), tokenAmount);
         }
 
-        // make the swap
-        pancakeRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
-            tokenAmount,
-            0, // accept any amount of ETH
-            path,
-            destination,
-            block.timestamp
-        );
+        swapTokens(tokenAddress, address(BUSD), tokenAmount, destination);
     }
 
-    function addLiquidity(uint256 tokenAmount, uint256 cAmount) private {
-        // approve token transfer to cover all possible scenarios
-        _approve(address(this), address(pancakeRouter), tokenAmount);
-
-        // add the liquidity
-        pancakeRouter.addLiquidityETH{value: cAmount}(
-            address(this),
+    function swapTokens(
+        address token0,
+        address token1,
+        uint256 tokenAmount,
+        address destination
+    ) private {
+        // generate the uniswap pair path of token -> weth
+        address[] memory path = new address[](2);
+        path[0] = token0;
+        path[1] = token1;
+        bool shouldUseTempWallet = token0 == destination || token1 == destination;
+        pancakeRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
             tokenAmount,
-            0, // slippage is unavoidable
-            0, // slippage is unavoidable
-            liquidityReceiver,
+            0,
+            path,
+            shouldUseTempWallet ? address(tempRewardReceiver) : destination,
+            block.timestamp
+        );
+
+        // transfer tokens back to the this address
+        if (shouldUseTempWallet)
+            tempRewardReceiver.transfer(token1, destination, IERC20(token1).balanceOf(address(tempRewardReceiver)));
+    }
+
+    function addLiquidity(uint256 _tokenAmount, uint256 _BUSDAmount) public authorized {
+        // approve token transfer to cover all possible scenarios
+        _approve(address(this), address(pancakeRouter), _tokenAmount);
+        // approve token transfer to cover all possible scenarios
+        BUSD.approve(address(pancakeRouter), _BUSDAmount);
+
+        pancakeRouter.addLiquidity(
+            address(this),
+            address(BUSD),
+            _tokenAmount,
+            _BUSDAmount,
+            0,
+            0,
+            address(this),
             block.timestamp
         );
     }
@@ -270,30 +307,23 @@ abstract contract LPSwapSupport is AuthorizedList {
 
     function swapCurrencyForTokensAdv(
         address tokenAddress,
-        uint256 amount,
+        uint256 tokenAmount,
         address destination
     ) internal {
-        // generate the pair path of token
-        address[] memory path = new address[](2);
-        path[0] = pancakeRouter.WETH();
-        path[1] = tokenAddress;
-        if (amount > address(this).balance) {
-            amount = address(this).balance;
+        if (tokenAmount > BUSD.balanceOf(address(this))) {
+            tokenAmount = BUSD.balanceOf(address(this));
         }
-        if (amount > maxSpendAmount) {
-            amount = maxSpendAmount;
+        if (tokenAmount > maxSpendAmount) {
+            tokenAmount = maxSpendAmount;
         }
-        if (amount < minSpendAmount) {
+        if (tokenAmount < minSpendAmount) {
             return;
         }
 
-        // make the swap
-        pancakeRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: amount}(
-            0,
-            path,
-            destination,
-            block.timestamp.add(400)
-        );
+        // approve token transfer to cover all possible scenarios
+        BUSD.approve(address(pancakeRouter), tokenAmount);
+
+        swapTokens(address(BUSD), tokenAddress, tokenAmount, destination);
     }
 
     function updateSwapRange(uint256 minAmount, uint256 maxAmount) external authorized {

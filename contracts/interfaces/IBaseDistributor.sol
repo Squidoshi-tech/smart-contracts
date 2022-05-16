@@ -13,7 +13,8 @@ interface IBaseDistributor {
         uint256 decimals;
     }
 
-    function deposit() external payable;
+    function deposit(uint256 _amount) external payable;
     function rewardCurrency() external view returns(string memory);
 
 }
+ 

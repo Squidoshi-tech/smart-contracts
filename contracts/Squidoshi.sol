@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.6.0;
-import "@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol";
-import "@pancakeswap/pancake-swap-lib/contracts/utils/Address.sol";
+pragma solidity ^0.6.12;
+
+import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./interfaces/ISquidoshiReflector.sol";
 import "./interfaces/ISmartLottery.sol";
 import "./utils/LockableFunction.sol";
@@ -9,13 +11,13 @@ import "./utils/AntiLPSniper.sol";
 import "./SmartBuyback.sol";
 import "./interfaces/ISupportingTokenInjection.sol";
 
-contract Squidoshi is
-    IBEP20,
-    ISupportingTokenInjection,
-    AntiLPSniper,
-    LockableFunction,
-    SmartBuyback
-{
+interface IERC20Detailed is IERC20 {
+    function name() external view virtual returns (string memory);
+
+    function decimals() external view virtual returns (uint8);
+}
+
+contract Squidoshi is IERC20Detailed, ISupportingTokenInjection, AntiLPSniper, LockableFunction, SmartBuyback {
     using SafeMath for uint256;
     using Address for address;
     using Address for address payable;
@@ -67,7 +69,7 @@ contract Squidoshi is
 
     uint256 public gasForProcessing = 400000;
 
-    address payable public marketingWallet;
+    address payable public splitterContract;
     address payable public vaultAddress;
     ISmartLottery public lotteryContract;
     ISquidoshiReflector public reflectorContract;
@@ -75,8 +77,9 @@ contract Squidoshi is
     constructor(
         uint256 _supply,
         address routerAddress,
-        address _marketingWallet,
-        address _vaultAddress
+        address _splitterContract,
+        address _vaultAddress,
+        address _owner
     ) public AuthorizedList() {
         _name = "Squidoshi";
         _symbol = "SQDI";
@@ -91,18 +94,18 @@ contract Squidoshi is
 
         liquidityReceiver = deadAddress;
 
-        marketingWallet = payable(_marketingWallet);
+        splitterContract = payable(_splitterContract);
         vaultAddress = payable(_vaultAddress);
         pancakeRouter = IPancakeRouter02(routerAddress);
 
         buySellFees = Fees({
-            liquidity: 3,
-            marketing: 3,
-            vault: 2,
-            tokenReflection: 2,
-            buyback: 2,
+            liquidity: 30,
+            marketing: 45,
+            vault: 20,
+            tokenReflection: 20,
+            buyback: 5,
             lottery: 0,
-            divisor: 100
+            divisor: 1000
         });
 
         transferFees = Fees({
@@ -124,36 +127,42 @@ contract Squidoshi is
             lottery: 0
         });
 
-        _isExcludedFromFee[owner()] = true;
+        _isExcludedFromFee[_owner] = true;
         _isExcludedFromFee[address(this)] = true;
         _isExcludedFromFee[deadAddress] = true;
-        _isExcludedFromFee[marketingWallet] = true;
+        _isExcludedFromFee[splitterContract] = true;
         _isExcludedFromFee[vaultAddress] = true;
 
-        balances[owner()] = _totalSupply;
+        balances[_owner] = _totalSupply;
         emit Transfer(address(this), _owner, _totalSupply);
+
+        transferOwnership(_owner);
     }
 
     function init(
         address payable _reflectorContract,
-        address payable _lotteryContract
+        address payable _lotteryContract,
+        address _BUSD
     ) external authorized {
-        require(!initialized, "Contract already initialized");
+        require(!initialized);
 
         automatedMarketMakerPairs[pancakePair] = true;
-
+        addBUSDAddress(_BUSD);
         reflectorContract = ISquidoshiReflector(_reflectorContract);
         lotteryContract = ISmartLottery(_lotteryContract);
 
         _isExcludedFromFee[address(_reflectorContract)] = true;
         _isExcludedFromFee[address(_lotteryContract)] = true;
+        _isExcludedFromFee[_BUSD] = true;
 
         reflectorContract.excludeFromReward(pancakePair, true);
+        reflectorContract.excludeFromReward(_BUSD, true);
         reflectorContract.excludeFromReward(_lotteryContract, true);
 
+        lotteryContract.excludeFromJackpot(_BUSD, true);
         lotteryContract.excludeFromJackpot(pancakePair, true);
         lotteryContract.excludeFromJackpot(_reflectorContract, true);
-        lotteryContract.excludeFromJackpot(marketingWallet, true);
+        lotteryContract.excludeFromJackpot(splitterContract, true);
         lotteryContract.excludeFromJackpot(vaultAddress, true);
 
         initialized = true;
@@ -162,13 +171,14 @@ contract Squidoshi is
     fallback() external payable {}
 
     //to recieve BNB from pancakeswapV2Router when swaping
+
     receive() external payable {}
 
     function name() public view override returns (string memory) {
         return _name;
     }
 
-    function symbol() public view override returns (string memory) {
+    function symbol() public view returns (string memory) {
         return _symbol;
     }
 
@@ -184,29 +194,16 @@ contract Squidoshi is
         return balances[account];
     }
 
-    function transfer(address recipient, uint256 amount)
-        public
-        override
-        returns (bool)
-    {
+    function transfer(address recipient, uint256 amount) public override returns (bool) {
         _transfer(_msgSender(), recipient, amount);
         return true;
     }
 
-    function allowance(address owner, address spender)
-        public
-        view
-        override
-        returns (uint256)
-    {
+    function allowance(address owner, address spender) public view override returns (uint256) {
         return _allowances[owner][spender];
     }
 
-    function approve(address spender, uint256 amount)
-        public
-        override
-        returns (bool)
-    {
+    function approve(address spender, uint256 amount) public override returns (bool) {
         _approve(_msgSender(), spender, amount);
         return true;
     }
@@ -217,48 +214,22 @@ contract Squidoshi is
         uint256 amount
     ) public override returns (bool) {
         _transfer(sender, recipient, amount);
-        _approve(
-            sender,
-            _msgSender(),
-            _allowances[sender][_msgSender()].sub(
-                amount,
-                "Transfer amount exceeds allowance"
-            )
-        );
+        _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount));
         return true;
     }
 
-    function increaseAllowance(address spender, uint256 addedValue)
-        public
-        virtual
-        returns (bool)
-    {
-        _approve(
-            _msgSender(),
-            spender,
-            _allowances[_msgSender()][spender].add(addedValue)
-        );
+    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
         return true;
     }
 
-    function decreaseAllowance(address spender, uint256 subtractedValue)
-        public
-        virtual
-        returns (bool)
-    {
-        _approve(
-            _msgSender(),
-            spender,
-            _allowances[_msgSender()][spender].sub(
-                subtractedValue,
-                "Decreased allowance below zero"
-            )
-        );
+    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].sub(subtractedValue));
         return true;
     }
 
-    function setMarketingWallet(address _marketingWallet) public onlyOwner {
-        marketingWallet = payable(_marketingWallet);
+    function setFeeSplitterContract(address _splitterContract) public onlyOwner {
+        splitterContract = payable(_splitterContract);
     }
 
     function setVaultAddress(address _vaultAddress) public onlyOwner {
@@ -273,26 +244,17 @@ contract Squidoshi is
         _maxSellTxAmount = _totalSupply.mul(amountBIPS).div(10000);
     }
 
-    function getOwner() external view override returns (address) {
+    function getOwner() external view returns (address) {
         return owner();
     }
 
     function updateGasForProcessing(uint256 newValue) public authorized {
-        require(
-            newValue >= 200000 && newValue <= 1000000,
-            "Gas requirement is between 200,000 and 1,000,000"
-        );
-        require(
-            newValue != gasForProcessing,
-            "Gas requirement already set to that value"
-        );
+        require(newValue >= 200000 && newValue <= 1000000);
+        require(newValue != gasForProcessing);
         gasForProcessing = newValue;
     }
 
-    function excludeFromFee(address account, bool shouldExclude)
-        public
-        authorized
-    {
+    function excludeFromFee(address account, bool shouldExclude) public authorized {
         _isExcludedFromFee[account] = shouldExclude;
     }
 
@@ -334,20 +296,17 @@ contract Squidoshi is
         ) = _calculateFees(amount, isTransfer);
 
         tokenTracker.liquidity = tokenTracker.liquidity.add(liquidityFee);
-        tokenTracker.marketingTokens = tokenTracker.marketingTokens.add(
-            marketingFee
-        );
+        tokenTracker.marketingTokens = tokenTracker.marketingTokens.add(marketingFee);
         tokenTracker.vaultTokens = tokenTracker.vaultTokens.add(vaultFee);
         tokenTracker.buyback = tokenTracker.buyback.add(buybackFee);
         tokenTracker.reward = tokenTracker.reward.add(reflectionFee);
         tokenTracker.lottery = tokenTracker.lottery.add(lotteryFee);
 
         uint256 totalFees = liquidityFee.add(marketingFee).add(vaultFee);
-        totalFees = totalFees.add(buybackFee).add(reflectionFee).add(
-            lotteryFee
-        );
+        totalFees = totalFees.add(buybackFee).add(reflectionFee).add(lotteryFee);
 
         balances[address(this)] = balances[address(this)].add(totalFees);
+
         emit Transfer(from, address(this), totalFees);
         transferAmount = amount.sub(totalFees);
     }
@@ -392,22 +351,13 @@ contract Squidoshi is
         });
     }
 
-    function setTokenSwapThreshold(uint256 minTokensBeforeTransfer)
-        public
-        authorized
-    {
+    function setTokenSwapThreshold(uint256 minTokensBeforeTransfer) public authorized {
         tokenSwapThreshold = minTokensBeforeTransfer * 10**_decimals;
     }
 
     function burn(uint256 burnAmount) public override {
-        require(
-            _msgSender() != address(0),
-            "BEP20: transfer from the zero address"
-        );
-        require(
-            balanceOf(_msgSender()) > burnAmount,
-            "Insufficient funds in account"
-        );
+        require(_msgSender() != address(0));
+        require(balanceOf(_msgSender()) > burnAmount);
         _burn(_msgSender(), burnAmount);
     }
 
@@ -421,10 +371,7 @@ contract Squidoshi is
         address spender,
         uint256 amount
     ) internal override {
-        require(
-            owner != address(0) && spender != address(0),
-            "BEP20: Approve involves the zero address"
-        );
+        require(owner != address(0) && spender != address(0));
 
         _allowances[owner][spender] = amount;
         emit Approval(owner, spender, amount);
@@ -435,30 +382,20 @@ contract Squidoshi is
         address to,
         uint256 amount
     ) private {
-        require(
-            from != address(0) && to != address(0),
-            "BEP20: Transfer involves the zero address"
-        );
-        require(
-            !isBlackListed[to] && !isBlackListed[from],
-            "Address blacklisted and cannot trade"
-        );
-        require(initialized, "Contract is not fully initialized");
+        require(from != address(0) && to != address(0));
+        require(!isBlackListed[to] && !isBlackListed[from]);
+        require(initialized);
         if (amount == 0) {
             _transferStandard(from, to, 0, 0);
         }
+
         uint256 transferAmount = amount;
         bool tryBuyback;
 
-        if (
-            from != owner() &&
-            to != owner() &&
-            !_isExcludedFromFee[from] &&
-            !_isExcludedFromFee[to]
-        ) {
+        if (from != owner() && to != owner() && !_isExcludedFromFee[from] && !_isExcludedFromFee[to]) {
             if (automatedMarketMakerPairs[from]) {
                 // Buy
-                require(amount <= _maxBuyTxAmount, "Buy quantity too large");
+                require(amount <= _maxBuyTxAmount);
                 if (!tradingIsEnabled && antiSniperEnabled) {
                     banHammer(to);
                     to = address(this);
@@ -467,12 +404,10 @@ contract Squidoshi is
                 }
             } else if (automatedMarketMakerPairs[to]) {
                 // Sell
-                require(tradingIsEnabled, "Trading is not enabled");
+                require(tradingIsEnabled);
+
                 if (from != address(this) && from != address(pancakeRouter)) {
-                    require(
-                        amount <= _maxSellTxAmount,
-                        "Sell quantity too large"
-                    );
+                    require(amount <= _maxSellTxAmount);
                     tryBuyback = shouldBuyback(balanceOf(pancakePair), amount);
                     transferAmount = _takeFees(from, amount, false);
                 }
@@ -480,32 +415,16 @@ contract Squidoshi is
                 // Transfer
                 transferAmount = _takeFees(from, amount, true);
             }
-        } else if (
-            from != address(this) && to != address(this) && tradingIsEnabled
-        ) {
+        } else if (from != address(this) && to != address(this) && tradingIsEnabled) {
             reflectorContract.process(gasForProcessing);
         }
 
-        try
-            reflectorContract.setShare(payable(from), balanceOf(from))
-        {} catch {}
+        try reflectorContract.setShare(payable(from), balanceOf(from)) {} catch {}
         try reflectorContract.setShare(payable(to), balanceOf(to)) {} catch {}
-        try
-            lotteryContract.logTransfer(
-                payable(from),
-                balanceOf(from),
-                payable(to),
-                balanceOf(to)
-            )
-        {} catch {}
+        try lotteryContract.logTransfer(payable(from), balanceOf(from), payable(to), balanceOf(to)) {} catch {}
         if (tryBuyback) {
             doBuyback(balanceOf(pancakePair), amount);
-        } else if (
-            !inSwap &&
-            from != pancakePair &&
-            from != address(pancakeRouter) &&
-            tradingIsEnabled
-        ) {
+        } else if (!inSwap && from != pancakePair && from != address(pancakeRouter) && tradingIsEnabled) {
             selectSwapEvent();
             try reflectorContract.claimDividendFor(from) {} catch {}
         }
@@ -521,38 +440,28 @@ contract Squidoshi is
         if (!swapsEnabled) {
             return;
         }
-        uint256 contractBalance = address(this).balance;
+        uint256 contractBalance = BUSD.balanceOf(address(this));
 
         if (tokenTracker.reward >= tokenSwapThreshold) {
-            uint256 toSwap = tokenTracker.reward > _maxSellTxAmount
-                ? _maxSellTxAmount
-                : tokenTracker.reward;
+            uint256 toSwap = tokenTracker.reward > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.reward;
             swapTokensForCurrency(toSwap);
-            uint256 swappedCurrency = address(this).balance.sub(
-                contractBalance
-            );
-            reflectorContract.deposit{value: swappedCurrency}();
+            uint256 swappedCurrency = BUSD.balanceOf(address(this)).sub(contractBalance);
+            BUSD.transfer(address(reflectorContract), swappedCurrency);
+            reflectorContract.deposit(swappedCurrency);
             tokenTracker.reward = tokenTracker.reward.sub(toSwap);
         } else if (tokenTracker.buyback >= tokenSwapThreshold) {
-            uint256 toSwap = tokenTracker.buyback > _maxSellTxAmount
-                ? _maxSellTxAmount
-                : tokenTracker.buyback;
+            uint256 toSwap = tokenTracker.buyback > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.buyback;
             swapTokensForCurrency(toSwap);
             tokenTracker.buyback = tokenTracker.buyback.sub(toSwap);
         } else if (tokenTracker.lottery >= tokenSwapThreshold) {
-            uint256 toSwap = tokenTracker.lottery > _maxSellTxAmount
-                ? _maxSellTxAmount
-                : tokenTracker.lottery;
+            uint256 toSwap = tokenTracker.lottery > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.lottery;
             swapTokensForCurrency(toSwap);
-            uint256 swappedCurrency = address(this).balance.sub(
-                contractBalance
-            );
-            lotteryContract.deposit{value: swappedCurrency}();
+            uint256 swappedCurrency = BUSD.balanceOf(address(this)).sub(contractBalance);
+            BUSD.transfer(address(lotteryContract), swappedCurrency);
+            lotteryContract.deposit(swappedCurrency);
             tokenTracker.lottery = tokenTracker.lottery.sub(toSwap);
         } else if (tokenTracker.liquidity >= tokenSwapThreshold) {
-            uint256 toSwap = tokenTracker.liquidity > _maxSellTxAmount
-                ? _maxSellTxAmount
-                : tokenTracker.liquidity;
+            uint256 toSwap = tokenTracker.liquidity > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.liquidity;
             swapAndLiquify(tokenTracker.liquidity);
             tokenTracker.liquidity = tokenTracker.liquidity.sub(toSwap);
         } else if (tokenTracker.marketingTokens >= tokenSwapThreshold) {
@@ -560,33 +469,25 @@ contract Squidoshi is
                 ? _maxSellTxAmount
                 : tokenTracker.marketingTokens;
             swapTokensForCurrency(toSwap);
-            uint256 swappedCurrency = address(this).balance.sub(
-                contractBalance
-            );
-            address(marketingWallet).call{value: swappedCurrency}("");
-            tokenTracker.marketingTokens = tokenTracker.marketingTokens.sub(
-                toSwap
-            );
+            uint256 swappedCurrency = BUSD.balanceOf(address(this)).sub(contractBalance);
+
+            BUSD.transfer(splitterContract, swappedCurrency);
+
+            tokenTracker.marketingTokens = tokenTracker.marketingTokens.sub(toSwap);
         } else if (tokenTracker.vaultTokens >= tokenSwapThreshold) {
-            uint256 toSwap = tokenTracker.vaultTokens > _maxSellTxAmount
-                ? _maxSellTxAmount
-                : tokenTracker.vaultTokens;
+            uint256 toSwap = tokenTracker.vaultTokens > _maxSellTxAmount ? _maxSellTxAmount : tokenTracker.vaultTokens;
             swapTokensForCurrency(toSwap);
-            uint256 swappedCurrency = address(this).balance.sub(
-                contractBalance
-            );
-            address(vaultAddress).call{value: swappedCurrency}("");
+            uint256 swappedCurrency = BUSD.balanceOf(address(this)).sub(contractBalance);
+
+            BUSD.transfer(vaultAddress, swappedCurrency);
+
             tokenTracker.vaultTokens = tokenTracker.vaultTokens.sub(toSwap);
         }
         try lotteryContract.checkAndPayJackpot() {} catch {}
         try reflectorContract.process(gasForProcessing) {} catch {}
     }
 
-    function authorizeCaller(address authAddress, bool shouldAuthorize)
-        external
-        override
-        onlyOwner
-    {
+    function authorizeCaller(address authAddress, bool shouldAuthorize) external override onlyOwner {
         authorizedCaller[authAddress] = shouldAuthorize;
 
         lotteryContract.authorizeCaller(authAddress, shouldAuthorize);
@@ -602,10 +503,14 @@ contract Squidoshi is
         lotteryContract.excludeFromJackpot(pancakePair, true);
     }
 
-    function registerPairAddress(address ammPair, bool isLPPair)
-        public
-        authorized
-    {
+    function addBUSDPair(address _BUSD) public authorized {
+        require(_BUSD != address(0));
+        address _pancakeswapV2Pair = IPancakeFactory(pancakeRouter.factory()).createPair(address(this), _BUSD);
+
+        updateLPPair(_pancakeswapV2Pair);
+    }
+
+    function registerPairAddress(address ammPair, bool isLPPair) public authorized {
         automatedMarketMakerPairs[ammPair] = isLPPair;
         reflectorContract.excludeFromReward(pancakePair, true);
         lotteryContract.excludeFromJackpot(pancakePair, true);
@@ -623,38 +528,26 @@ contract Squidoshi is
     }
 
     function openTrading() external authorized {
-        require(!tradingIsEnabled, "Trading already open");
+        require(!tradingIsEnabled);
         tradingIsEnabled = true;
         swapsEnabled = true;
         autoBuybackEnabled = true;
         autoBuybackAtCap = true;
     }
 
-    function updateReflectionContract(address newReflectorAddress)
-        external
-        authorized
-    {
+    function updateReflectionContract(address newReflectorAddress) external authorized {
         reflectorContract = ISquidoshiReflector(newReflectorAddress);
     }
 
-    function updateLotteryContract(address newLotteryAddress)
-        external
-        authorized
-    {
+    function updateLotteryContract(address newLotteryAddress) external authorized {
         lotteryContract = ISmartLottery(newLotteryAddress);
     }
 
-    function excludeFromJackpot(address userAddress, bool shouldExclude)
-        external
-        authorized
-    {
+    function excludeFromJackpot(address userAddress, bool shouldExclude) external authorized {
         lotteryContract.excludeFromJackpot(userAddress, shouldExclude);
     }
 
-    function excludeFromRewards(address userAddress, bool shouldExclude)
-        external
-        authorized
-    {
+    function excludeFromRewards(address userAddress, bool shouldExclude) external authorized {
         reflectorContract.excludeFromReward(userAddress, shouldExclude);
     }
 
@@ -673,25 +566,10 @@ contract Squidoshi is
         uint256 buybackDeposit
     ) external override {
         require(
-            balanceOf(_msgSender()) >=
-                (
-                    liquidityDeposit
-                        .add(rewardsDeposit)
-                        .add(jackpotDeposit)
-                        .add(buybackDeposit)
-                ),
-            "You do not have the balance to perform this action"
+            balanceOf(_msgSender()) >= (liquidityDeposit.add(rewardsDeposit).add(jackpotDeposit).add(buybackDeposit))
         );
-        uint256 totalDeposit = liquidityDeposit
-            .add(rewardsDeposit)
-            .add(jackpotDeposit)
-            .add(buybackDeposit);
-        _transferStandard(
-            _msgSender(),
-            address(this),
-            totalDeposit,
-            totalDeposit
-        );
+        uint256 totalDeposit = liquidityDeposit.add(rewardsDeposit).add(jackpotDeposit).add(buybackDeposit);
+        _transferStandard(_msgSender(), address(this), totalDeposit, totalDeposit);
         tokenTracker.liquidity = tokenTracker.liquidity.add(liquidityDeposit);
         tokenTracker.reward = tokenTracker.reward.add(rewardsDeposit);
         tokenTracker.lottery = tokenTracker.lottery.add(jackpotDeposit);

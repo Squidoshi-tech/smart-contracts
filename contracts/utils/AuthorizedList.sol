@@ -16,7 +16,7 @@ contract AuthorizedList is IAuthorizedList, Context, Ownable {
 
     modifier authorized() {
         require(authorizedCaller[_msgSender()] || _msgSender() == owner(), 'not authorized');
-        require(_msgSender() != address(0), 'Invalid caller');
+        require(_msgSender() != address(0));
         _;
     }
 

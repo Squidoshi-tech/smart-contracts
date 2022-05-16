@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.6.0;
 
-import "@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol";
-import "@pancakeswap/pancake-swap-lib/contracts/utils/Address.sol";
-import "@pancakeswap/pancake-swap-lib/contracts/GSN/Context.sol";
-import "@pancakeswap/pancake-swap-lib/contracts/token/BEP20/IBEP20.sol";
-import "./interfaces/ISquidoshiReflector.sol";
-import "./utils/LPSwapSupport.sol";
-import "./utils/AuthorizedListExt.sol";
-import "./utils/LockableFunction.sol";
+import '@openzeppelin/contracts/math/SafeMath.sol';
+import '@openzeppelin/contracts/utils/Address.sol';
+import '@openzeppelin/contracts/GSN/Context.sol';
+import '@openzeppelin/contracts/token/ERC20/IERC20.sol';
+import './interfaces/ISquidoshiReflector.sol';
+import './utils/LPSwapSupport.sol';
+import './utils/AuthorizedListExt.sol';
+import './utils/LockableFunction.sol';
 
-contract SquidoshiReflector is
-    ISquidoshiReflector,
-    LPSwapSupport,
-    AuthorizedListExt,
-    LockableFunction
-{
+interface IERC20Detailed is IERC20 {
+    function name() external returns (string memory);
+
+    function decimals() external returns (uint256);
+}
+
+contract SquidoshiReflector is ISquidoshiReflector, LPSwapSupport, AuthorizedListExt, LockableFunction {
     using Address for address;
     using SafeMath for uint256;
 
@@ -27,7 +28,7 @@ contract SquidoshiReflector is
         uint256 totalRealised;
     }
 
-    IBEP20 public rewardsToken;
+    IERC20Detailed public rewardsToken;
     RewardType private rewardType;
     RewardInfo private rewardTokenInfo;
 
@@ -68,12 +69,12 @@ contract SquidoshiReflector is
 
         if (_rewardsToken == address(0)) {
             rewardType = RewardType.CURRENCY;
-            rewardTokenInfo.name = "BNB";
+            rewardTokenInfo.name = 'BNB';
             rewardTokenInfo.rewardAddress = address(0);
             rewardTokenInfo.decimals = defaultDecimals;
         } else {
             rewardType = RewardType.TOKEN;
-            rewardsToken = IBEP20(_rewardsToken);
+            rewardsToken = IERC20Detailed(_rewardsToken);
             rewardTokenInfo.name = rewardsToken.name();
             rewardTokenInfo.rewardAddress = _rewardsToken;
             rewardTokenInfo.decimals = 10**uint256(rewardsToken.decimals());
@@ -83,34 +84,23 @@ contract SquidoshiReflector is
         isExcludedFromDividends[deadAddress] = true;
 
         authorizedCaller[squidoshi] = true;
-        _owner = squidoshi;
+        transferOwnership(squidoshi);
     }
 
     function rewardCurrency() public view override returns (string memory) {
         return rewardTokenInfo.name;
     }
 
-    function excludeFromReward(address shareholder, bool shouldExclude)
-        external
-        override
-        onlyOwner
-    {
+    function excludeFromReward(address shareholder, bool shouldExclude) external override onlyOwner {
         isExcludedFromDividends[shareholder] = shouldExclude;
     }
 
-    function setDistributionCriteria(
-        uint256 _minPeriod,
-        uint256 _minDistribution
-    ) external override authorized {
+    function setDistributionCriteria(uint256 _minPeriod, uint256 _minDistribution) external override authorized {
         minPeriod = _minPeriod;
         minDistribution = _minDistribution;
     }
 
-    function setShare(address shareholder, uint256 amount)
-        external
-        override
-        onlyOwner
-    {
+    function setShare(address shareholder, uint256 amount) external override onlyOwner {
         if (shares[shareholder].amount > 0) {
             distributeDividend(shareholder);
         }
@@ -123,106 +113,76 @@ contract SquidoshiReflector is
 
         totalShares = totalShares.sub(shares[shareholder].amount).add(amount);
         shares[shareholder].amount = amount;
-        shares[shareholder].totalExcluded = getCumulativeDividends(
-            shares[shareholder].amount
-        );
+        shares[shareholder].totalExcluded = getCumulativeDividends(shares[shareholder].amount);
     }
 
     receive() external payable {
-        if (!inSwap) swap();
+        if (!inSwap) {
+         swap(BUSD.balanceOf(address(this)));   
+        }
     }
 
-    function deposit() external payable override onlyOwner {
-        if (!inSwap) swap();
+    function deposit(uint256 _amount) external payable override onlyOwner {
+        if (!inSwap) swap(_amount);
     }
 
-    function swap() private lockTheSwap {
+    function swap(uint256 _amount) private lockTheSwap {
         uint256 amount;
         if (rewardType == RewardType.TOKEN) {
-            uint256 contractBalance = address(this).balance;
+            uint256 contractBalance = BUSD.balanceOf(address(this));
             uint256 balanceBefore = rewardsToken.balanceOf(address(this));
 
-            swapCurrencyForTokensAdv(
-                address(rewardsToken),
-                contractBalance,
-                address(this)
-            );
+            swapCurrencyForTokensAdv(address(rewardsToken), contractBalance, address(this));
 
             amount = rewardsToken.balanceOf(address(this)).sub(balanceBefore);
         } else {
-            amount = msg.value;
+            amount = _amount;
         }
 
         totalDividends = totalDividends.add(amount);
-        dividendsPerShare = dividendsPerShare.add(
-            dividendsPerShareAccuracyFactor.mul(amount).div(totalShares)
-        );
+        dividendsPerShare = dividendsPerShare.add(dividendsPerShareAccuracyFactor.mul(amount).div(totalShares));
     }
 
     function setRewardToCurrency(bool andSwap) external override authorized {
-        require(
-            rewardType != RewardType.CURRENCY,
-            "Rewards already set to reflect currency"
-        );
+        require(rewardType != RewardType.CURRENCY);
         if (!inSwap) resetToCurrency(andSwap);
     }
 
     function resetToCurrency(bool andSwap) private lockTheSwap {
         uint256 contractBalance = rewardsToken.balanceOf(address(this));
         if (contractBalance > rewardTokenInfo.decimals && andSwap)
-            swapTokensForCurrencyAdv(
-                address(rewardsToken),
-                contractBalance,
-                address(this)
-            );
-        rewardsToken = IBEP20(0);
-        totalDividends = address(this).balance;
-        dividendsPerShare = dividendsPerShareAccuracyFactor
-            .mul(totalDividends)
-            .div(totalShares);
+            swapTokensForCurrencyAdv(address(rewardsToken), contractBalance, address(this));
+        rewardsToken = IERC20Detailed(0);
+        totalDividends = BUSD.balanceOf(address(this));
+        dividendsPerShare = dividendsPerShareAccuracyFactor.mul(totalDividends).div(totalShares);
 
-        rewardTokenInfo.name = "BNB";
+        rewardTokenInfo.name = 'BNB';
         rewardTokenInfo.rewardAddress = address(0);
         rewardTokenInfo.decimals = defaultDecimals;
 
         rewardType = RewardType.CURRENCY;
     }
 
-    function setRewardToToken(address _tokenAddress, bool andSwap)
-        external
-        override
-        authorized
-    {
+    function setRewardToToken(address _tokenAddress, bool andSwap) external override authorized {
         require(
-            rewardType != RewardType.TOKEN ||
-                _tokenAddress != address(rewardsToken),
-            "Rewards already set to reflect this token"
+            rewardType != RewardType.TOKEN || _tokenAddress != address(rewardsToken)
         );
         if (!inSwap) resetToToken(_tokenAddress, andSwap);
     }
 
-    function resetToToken(address _tokenAddress, bool andSwap)
-        private
-        lockTheSwap
-    {
+    function resetToToken(address _tokenAddress, bool andSwap) private lockTheSwap {
         uint256 contractBalance;
         if (rewardType == RewardType.TOKEN && andSwap) {
             contractBalance = rewardsToken.balanceOf(address(this));
             if (contractBalance > rewardTokenInfo.decimals)
-                swapTokensForCurrencyAdv(
-                    address(rewardsToken),
-                    contractBalance,
-                    address(this)
-                );
+                swapTokensForCurrencyAdv(address(rewardsToken), contractBalance, address(this));
         }
-        contractBalance = address(this).balance;
+        contractBalance =  BUSD.balanceOf(address(this));
         swapCurrencyForTokensAdv(_tokenAddress, contractBalance, address(this));
 
-        rewardsToken = IBEP20(payable(_tokenAddress));
+        rewardsToken = IERC20Detailed(payable(_tokenAddress));
         totalDividends = rewardsToken.balanceOf(address(this));
-        dividendsPerShare = dividendsPerShareAccuracyFactor
-            .mul(totalDividends)
-            .div(totalShares);
+        dividendsPerShare = dividendsPerShareAccuracyFactor.mul(totalDividends).div(totalShares);
 
         rewardTokenInfo.name = rewardsToken.name();
         rewardTokenInfo.rewardAddress = _tokenAddress;
@@ -273,11 +233,7 @@ contract SquidoshiReflector is
         }
     }
 
-    function shouldDistribute(address shareholder)
-        internal
-        view
-        returns (bool)
-    {
+    function shouldDistribute(address shareholder) internal view returns (bool) {
         return
             shareholderClaims[shareholder] + minPeriod < block.timestamp &&
             getUnpaidEarnings(shareholder) > minDistribution &&
@@ -285,28 +241,21 @@ contract SquidoshiReflector is
     }
 
     function distributeDividend(address shareholder) internal {
-        if (
-            shares[shareholder].amount == 0 ||
-            isExcludedFromDividends[shareholder]
-        ) {
+        if (shares[shareholder].amount == 0 || isExcludedFromDividends[shareholder]) {
             return;
         }
 
         uint256 amount = getUnpaidEarnings(shareholder);
         if (amount > 0) {
             shareholderClaims[shareholder] = block.timestamp;
-            shares[shareholder].totalRealised = shares[shareholder]
-                .totalRealised
-                .add(amount);
-            shares[shareholder].totalExcluded = getCumulativeDividends(
-                shares[shareholder].amount
-            );
+            shares[shareholder].totalRealised = shares[shareholder].totalRealised.add(amount);
+            shares[shareholder].totalExcluded = getCumulativeDividends(shares[shareholder].amount);
             totalDistributed = totalDistributed.add(amount);
 
             if (rewardType == RewardType.TOKEN) {
                 rewardsToken.transfer(shareholder, amount);
             } else {
-                shareholder.call{value: amount, gas: 30_000}("");
+                shareholder.call{value: amount, gas: 30_000}('');
             }
         }
     }
@@ -319,18 +268,12 @@ contract SquidoshiReflector is
         distributeDividend(shareholder);
     }
 
-    function getUnpaidEarnings(address shareholder)
-        public
-        view
-        returns (uint256)
-    {
+    function getUnpaidEarnings(address shareholder) public view returns (uint256) {
         if (shares[shareholder].amount == 0) {
             return 0;
         }
 
-        uint256 shareholderTotalDividends = getCumulativeDividends(
-            shares[shareholder].amount
-        );
+        uint256 shareholderTotalDividends = getCumulativeDividends(shares[shareholder].amount);
         uint256 shareholderTotalExcluded = shares[shareholder].totalExcluded;
 
         if (shareholderTotalDividends <= shareholderTotalExcluded) {
@@ -340,13 +283,8 @@ contract SquidoshiReflector is
         return shareholderTotalDividends.sub(shareholderTotalExcluded);
     }
 
-    function getCumulativeDividends(uint256 share)
-        internal
-        view
-        returns (uint256)
-    {
-        return
-            share.mul(dividendsPerShare).div(dividendsPerShareAccuracyFactor);
+    function getCumulativeDividends(uint256 share) internal view returns (uint256) {
+        return share.mul(dividendsPerShare).div(dividendsPerShareAccuracyFactor);
     }
 
     function addShareholder(address shareholder) internal {
@@ -355,12 +293,8 @@ contract SquidoshiReflector is
     }
 
     function removeShareholder(address shareholder) internal {
-        shareholders[shareholderIndexes[shareholder]] = shareholders[
-            shareholders.length - 1
-        ];
-        shareholderIndexes[
-            shareholders[shareholders.length - 1]
-        ] = shareholderIndexes[shareholder];
+        shareholders[shareholderIndexes[shareholder]] = shareholders[shareholders.length - 1];
+        shareholderIndexes[shareholders[shareholders.length - 1]] = shareholderIndexes[shareholder];
         shareholders.pop();
     }
 }
