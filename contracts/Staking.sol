@@ -13,6 +13,8 @@ contract Staking is Ownable {
     struct Deposit {
         uint256 tokenAmount;
         uint256 weight;
+        uint256 lockedAt;
+        uint256 lockMode;
         uint256 lockedUntil;
         uint256 rewardDebt;
         uint256 rewardDebtAlt;
@@ -109,9 +111,17 @@ contract Staking is Ownable {
     }
 
     // Returns information on the given deposit for the given address
-    function getDeposit(address _user, uint256 _depositId) external view returns (uint256, uint256, uint256, uint256, uint256) {
+    function getDeposit(address _user, uint256 _depositId) external view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256) {
         Deposit storage stakeDeposit = userInfo[_user].deposits[_depositId];
-        return (stakeDeposit.tokenAmount, stakeDeposit.weight, stakeDeposit.lockedUntil, stakeDeposit.rewardDebt, stakeDeposit.rewardDebtAlt);
+        return (
+            stakeDeposit.tokenAmount,
+            stakeDeposit.weight,
+            stakeDeposit.lockedAt,
+            stakeDeposit.lockMode,
+            stakeDeposit.lockedUntil,
+            stakeDeposit.rewardDebt,
+            stakeDeposit.rewardDebtAlt
+        );
     }
 
     // Returns number of deposits for the given address. Allows iteration over deposits.
@@ -286,6 +296,8 @@ contract Staking is Ownable {
             Deposit({
                 tokenAmount: _amount,
                 weight: stakeWeight,
+                lockedAt: now256(),
+                lockMode: _lockMode,
                 lockedUntil: lockUntil,
                 rewardDebt: (stakeWeight*accTokenPerUnitWeight) / MULTIPLIER,
                 rewardDebtAlt: (stakeWeight*accTokenPerUnitWeightAlt) / MULTIPLIER
